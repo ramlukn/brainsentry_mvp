@@ -516,9 +516,9 @@ function HomeScreen({ onRunCheck, onOpenDashboard }) {
         </div>
       </div>
 
-      {/* Passive check row */}
+      {/* Passive check row — clicking "run one now" starts an active check */}
       <div style={{ padding: '14px 22px 0' }}>
-        <button style={{
+        <button onClick={onRunCheck} style={{
           width: '100%', padding: 14, borderRadius: 18, background: T.surface,
           border: `1px solid ${T.hairline}`, cursor: 'pointer',
           display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left',
@@ -638,6 +638,13 @@ function DashboardScreen({ onRunCheck, onBack }) {
             {TREND_HEADERS[range]}
           </div>
         </div>
+        <button onClick={onBack} aria-label="Home" style={{
+          width: 36, height: 36, borderRadius: '50%', background: T.surface,
+          border: `1px solid ${T.hairline}`, display: 'flex', alignItems: 'center',
+          justifyContent: 'center', cursor: 'pointer', padding: 0,
+        }}>
+          <Icon name="home" size={18} color={T.ink2}/>
+        </button>
       </div>
 
       {/* Status banner */}

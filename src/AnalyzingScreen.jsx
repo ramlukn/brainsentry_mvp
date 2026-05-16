@@ -12,6 +12,8 @@ const INK    = '#112D4E';
 const INK2   = '#3F72AF';
 const INK3   = '#7A92B5';
 const HOT    = '#C36F2E';
+// Mesh/graticule color — the visible wireframe lines on the globe.
+const MESH   = '#3E73B1';
 // Slightly brighter blue used for the flares so they pop against navy
 // continents without leaving the palette.
 const SIGNAL = '#5891D6';
@@ -234,7 +236,7 @@ function EarthGlobe() {
 
       <group ref={spin}>
         {/* Sparse lat/long graticule replaces the noisy triangulated wireframe */}
-        <Graticule color={INK2} opacity={0.16}/>
+        <Graticule color={MESH} opacity={0.20}/>
 
         {/* Continent outlines drawn as 3D polylines */}
         {rings.map((points, i) => (
@@ -300,8 +302,8 @@ function makeEcgPath(beats, w, h) {
   return d;
 }
 
-function HeartbeatLine({ durationMs }) {
-  const W = 310, H = 26, BEATS = 4;
+function HeartbeatLine() {
+  const W = 310, H = 26, BEATS = 10;
   const d = useMemo(() => makeEcgPath(BEATS, W, H), []);
   return (
     <div style={{
@@ -315,30 +317,49 @@ function HeartbeatLine({ durationMs }) {
         height={H}
         style={{ display: 'block', overflow: 'visible' }}
       >
+        {/* Track */}
         <line x1="0" y1={H / 2} x2={W} y2={H / 2}
-          stroke="rgba(17,45,78,0.10)" strokeWidth="1"/>
+          stroke="rgba(17,45,78,0.08)" strokeWidth="1"/>
+        {/* Faint full trace — always visible */}
         <path
           d={d}
           fill="none"
           stroke={INK}
-          strokeWidth="1.5"
+          strokeWidth="1.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity="0.20"
+          pathLength="100"
+        />
+        {/* Bright "scanner" — a short dash that travels along the trace,
+            looping infinitely. Reads like a live monitor sweep. */}
+        <path
+          d={d}
+          fill="none"
+          stroke={INK}
+          strokeWidth="1.6"
           strokeLinecap="round"
           strokeLinejoin="round"
           pathLength="100"
           style={{
-            strokeDasharray: '100',
-            strokeDashoffset: '100',
-            animation: `bsEcgTrace ${durationMs}ms linear forwards`,
+            strokeDasharray: '18 100',
+            strokeDashoffset: '0',
+            animation: 'bsEcgScan 2.6s linear infinite',
           }}
         />
       </svg>
-      <style>{`@keyframes bsEcgTrace { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }`}</style>
+      <style>{`
+        @keyframes bsEcgScan {
+          from { stroke-dashoffset: 0;    }
+          to   { stroke-dashoffset: -118; }
+        }
+      `}</style>
     </div>
   );
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────
-const DURATION_MS = 2500;
+const DURATION_MS = 7000;
 
 export default function AnalyzingScreen({ onComplete }) {
   const [phase, setPhase] = useState(0);
@@ -405,7 +426,7 @@ export default function AnalyzingScreen({ onComplete }) {
         </div>
       </div>
 
-      <HeartbeatLine durationMs={DURATION_MS}/>
+      <HeartbeatLine/>
     </div>
   );
 }
