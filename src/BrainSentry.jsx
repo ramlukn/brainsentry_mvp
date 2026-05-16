@@ -1,4 +1,7 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, Suspense, lazy } from 'react';
+
+// Heavy three.js scene is code-split out of the initial bundle.
+const AnalyzingScreen = lazy(() => import('./AnalyzingScreen'));
 
 // ─── Design tokens ─────────────────────────────────────────────────────────
 const T = {
@@ -165,18 +168,18 @@ function Sparkline({ points, color = T.ink2, width = 100, height = 36 }) {
   );
 }
 
-// ─── Proper line chart with axes, grid, and points ────────────────────────
-function LineChart({ points, labels, color = T.ink2, width = 300, height = 130, unit = '%' }) {
+// ─── Deviation-from-baseline line chart ───────────────────────────────────
+// `points` are signed deviations as fractions (e.g. +0.02 = +2% above
+// baseline, -0.01 = -1% below). Y-axis is symmetric around 0 ("Baseline")
+// with at least ±5% headroom so the line has room to breathe.
+function LineChart({ points, labels, color = T.ink2, width = 300, height = 130 }) {
   if (!points || points.length < 2) return null;
-  const padL = 28, padR = 8, padT = 10, padB = 22;
+  const padL = 44, padR = 10, padT = 12, padB = 22;
   const innerW = width - padL - padR;
   const innerH = height - padT - padB;
-  const min = Math.min(...points);
-  const max = Math.max(...points);
-  const center = (min + max) / 2;
-  const span = Math.max(0.04, max - min);
-  const yMin = center - span;
-  const yMax = center + span;
+  const maxAbs = Math.max(0.05, ...points.map((p) => Math.abs(p)));
+  const yMax = maxAbs * 1.3;
+  const yMin = -yMax;
   const range = yMax - yMin;
   const stepX = innerW / (points.length - 1);
   const toX = (i) => padL + i * stepX;
@@ -189,33 +192,69 @@ function LineChart({ points, labels, color = T.ink2, width = 300, height = 130, 
     const mx = (x1 + x2) / 2;
     d += ` Q ${mx} ${y1}, ${mx} ${(y1 + y2) / 2} T ${x2} ${y2}`;
   }
-  const area = `${d} L ${segs[segs.length - 1][0]} ${padT + innerH} L ${segs[0][0]} ${padT + innerH} Z`;
-  const baselineY = toY(center);
-  const yTicks = [yMax, center, yMin];
-  const gradId = `bsLcGrad-${color.replace('#', '')}`;
+  const baselineY = toY(0);
+  const tickPct = (yMax * 100).toFixed(0);
+  const yTicks = [
+    { v: yMax, label: `+${tickPct}%`, dashed: true  },
+    { v: 0,    label: 'Baseline',     dashed: false },
+    { v: yMin, label: `−${tickPct}%`, dashed: true  },
+  ];
+  const gradTop = `bsLcGradTop-${color.replace('#', '')}`;
+  const gradBot = `bsLcGradBot-${color.replace('#', '')}`;
+  // Two-direction fill: tint above baseline up, tint below baseline down.
+  const areaUp =
+    `M ${segs[0][0]} ${baselineY} ` +
+    segs.map(([x, y]) => `L ${x} ${y}`).join(' ') +
+    ` L ${segs[segs.length - 1][0]} ${baselineY} Z`;
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
       <defs>
-        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%"   stopColor={color} stopOpacity="0.22"/>
+        <linearGradient id={gradTop} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stopColor={color} stopOpacity="0.18"/>
           <stop offset="100%" stopColor={color} stopOpacity="0"/>
         </linearGradient>
+        <linearGradient id={gradBot} x1="0" y1="1" x2="0" y2="0">
+          <stop offset="0%"   stopColor={color} stopOpacity="0.12"/>
+          <stop offset="100%" stopColor={color} stopOpacity="0"/>
+        </linearGradient>
+        <clipPath id={`bsClipTop-${color.replace('#', '')}`}>
+          <rect x={padL} y={padT} width={innerW} height={baselineY - padT}/>
+        </clipPath>
+        <clipPath id={`bsClipBot-${color.replace('#', '')}`}>
+          <rect x={padL} y={baselineY} width={innerW} height={padT + innerH - baselineY}/>
+        </clipPath>
       </defs>
-      {yTicks.map((tv, i) => {
-        const y = toY(tv);
+
+      {/* Y-axis grid + labels */}
+      {yTicks.map((t, i) => {
+        const y = toY(t.v);
+        const isBaseline = t.v === 0;
         return (
           <g key={i}>
             <line x1={padL} y1={y} x2={width - padR} y2={y}
-              stroke={T.hairline} strokeWidth="1"
-              strokeDasharray={i === 1 ? '0' : '3 4'}/>
+              stroke={isBaseline ? T.hairlineStr : T.hairline}
+              strokeWidth={isBaseline ? 1.2 : 1}
+              strokeDasharray={t.dashed ? '3 4' : '0'}/>
             <text x={padL - 6} y={y + 3} textAnchor="end"
-              fontSize="9" fill={T.ink3} fontFamily={MONO}>
-              {(tv * 100).toFixed(0)}{unit}
+              fontSize={isBaseline ? 9 : 8.5}
+              fill={isBaseline ? T.ink2 : T.ink3}
+              fontFamily={isBaseline ? FONT : MONO}
+              fontWeight={isBaseline ? 700 : 400}>
+              {t.label}
             </text>
           </g>
         );
       })}
-      <path d={area} fill={`url(#${gradId})`}/>
+
+      {/* Tinted area above/below baseline */}
+      <g clipPath={`url(#bsClipTop-${color.replace('#', '')})`}>
+        <path d={areaUp} fill={`url(#${gradTop})`}/>
+      </g>
+      <g clipPath={`url(#bsClipBot-${color.replace('#', '')})`}>
+        <path d={areaUp} fill={`url(#${gradBot})`}/>
+      </g>
+
+      {/* Line + points */}
       <path d={d} fill="none" stroke={color} strokeWidth="2"
         strokeLinecap="round" strokeLinejoin="round"/>
       {segs.map(([x, y], i) => (
@@ -223,6 +262,8 @@ function LineChart({ points, labels, color = T.ink2, width = 300, height = 130, 
           fill={i === segs.length - 1 ? '#fff' : color}
           stroke={color} strokeWidth={i === segs.length - 1 ? 2 : 0}/>
       ))}
+
+      {/* X-axis day labels */}
       {labels && labels.map((l, i) => (
         <text key={i} x={toX(i)} y={height - 6} textAnchor="middle"
           fontSize="9.5" fill={T.ink3} fontFamily={FONT}
@@ -586,12 +627,11 @@ function DashboardScreen({ onRunCheck, onBack }) {
         </div>
       </div>
 
-      {/* Face trend card */}
+      {/* Face trend card — signed deviation from personal baseline */}
       <div style={{ padding: '12px 22px 0' }}>
         <TrendCard
           icon="face" title="Face symmetry"
-          current="94%"
-          points={[0.92, 0.95, 0.93, 0.96, 0.94, 0.95, 0.94]}
+          points={[-0.02, 0.01, -0.01, 0.02, 0.00, 0.01, 0.00]}
           labels={['M', 'T', 'W', 'T', 'F', 'S', 'S']}
         />
       </div>
@@ -600,8 +640,7 @@ function DashboardScreen({ onRunCheck, onBack }) {
       <div style={{ padding: '10px 22px 0' }}>
         <TrendCard
           icon="mic" title="Voice clarity"
-          current="91%"
-          points={[0.88, 0.92, 0.90, 0.93, 0.89, 0.91, 0.91]}
+          points={[-0.03, 0.01, -0.01, 0.02, -0.02, 0.00, 0.00]}
           labels={['M', 'T', 'W', 'T', 'F', 'S', 'S']}
         />
       </div>
@@ -627,7 +666,10 @@ function DashboardScreen({ onRunCheck, onBack }) {
   );
 }
 
-function TrendCard({ icon, title, points, labels, current }) {
+function TrendCard({ icon, title, points, labels }) {
+  const latest = points[points.length - 1] ?? 0;
+  const pct = Math.abs(latest * 100);
+  const sign = latest > 0.0005 ? '+' : latest < -0.0005 ? '−' : '±';
   return (
     <div style={{
       background: T.surface, borderRadius: T.radiusCard, padding: 16,
@@ -643,9 +685,12 @@ function TrendCard({ icon, title, points, labels, current }) {
         <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: T.ink }}>{title}</span>
         <span style={{
           fontSize: 18, fontWeight: 700, color: T.ink,
-          fontVariantNumeric: 'tabular-nums', letterSpacing: -0.4,
-        }}>{current}</span>
-        <span style={{ fontSize: 11, fontWeight: 600, color: T.ok }}>±0</span>
+          fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3,
+        }}>{sign}{pct.toFixed(0)}%</span>
+        <span style={{
+          fontSize: 10.5, fontWeight: 600, color: T.ink3,
+          textTransform: 'uppercase', letterSpacing: 0.4,
+        }}>vs base</span>
       </div>
       <ChartContainer points={points} labels={labels}/>
     </div>
@@ -1250,13 +1295,22 @@ function ResultRow({ label }) {
 }
 
 // ─── Root component (default export) ──────────────────────────────────────
+const VALID_PAGES = ['home', 'dashboard', 'face-test', 'voice-test', 'analyzing', 'results'];
+
 export default function BrainSentry() {
-  const [page, setPage] = useState('home');
+  // Allow ?page=<name> for direct navigation to any screen during development
+  // (e.g. http://localhost:5173/?page=analyzing). Falls through to 'home'.
+  const [page, setPage] = useState(() => {
+    if (typeof window === 'undefined') return 'home';
+    const p = new URLSearchParams(window.location.search).get('page');
+    return VALID_PAGES.includes(p) ? p : 'home';
+  });
 
   const goHome      = () => setPage('home');
   const goDashboard = () => setPage('dashboard');
   const goFaceTest  = () => setPage('face-test');
   const goVoiceTest = () => setPage('voice-test');
+  const goAnalyzing = () => setPage('analyzing');
   const goResults   = () => setPage('results');
 
   let content;
@@ -1271,7 +1325,14 @@ export default function BrainSentry() {
       content = <FaceTestScreen onComplete={goVoiceTest} onClose={goHome}/>;
       break;
     case 'voice-test':
-      content = <VoiceTestScreen onComplete={goResults} onClose={goHome}/>;
+      content = <VoiceTestScreen onComplete={goAnalyzing} onClose={goHome}/>;
+      break;
+    case 'analyzing':
+      content = (
+        <Suspense fallback={<div style={{ position: 'absolute', inset: 0, background: '#000' }}/>}>
+          <AnalyzingScreen onComplete={goResults}/>
+        </Suspense>
+      );
       break;
     case 'results':
       content = <ResultsScreen onViewTrends={goDashboard} onDone={goHome} onClose={goHome}/>;
