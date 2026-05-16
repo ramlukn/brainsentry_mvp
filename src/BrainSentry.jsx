@@ -165,6 +165,75 @@ function Sparkline({ points, color = T.ink2, width = 100, height = 36 }) {
   );
 }
 
+// ─── Proper line chart with axes, grid, and points ────────────────────────
+function LineChart({ points, labels, color = T.ink2, width = 300, height = 130, unit = '%' }) {
+  if (!points || points.length < 2) return null;
+  const padL = 28, padR = 8, padT = 10, padB = 22;
+  const innerW = width - padL - padR;
+  const innerH = height - padT - padB;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const center = (min + max) / 2;
+  const span = Math.max(0.04, max - min);
+  const yMin = center - span;
+  const yMax = center + span;
+  const range = yMax - yMin;
+  const stepX = innerW / (points.length - 1);
+  const toX = (i) => padL + i * stepX;
+  const toY = (v) => padT + innerH - ((v - yMin) / range) * innerH;
+  const segs = points.map((p, i) => [toX(i), toY(p)]);
+  let d = `M ${segs[0][0]} ${segs[0][1]}`;
+  for (let i = 1; i < segs.length; i++) {
+    const [x1, y1] = segs[i - 1];
+    const [x2, y2] = segs[i];
+    const mx = (x1 + x2) / 2;
+    d += ` Q ${mx} ${y1}, ${mx} ${(y1 + y2) / 2} T ${x2} ${y2}`;
+  }
+  const area = `${d} L ${segs[segs.length - 1][0]} ${padT + innerH} L ${segs[0][0]} ${padT + innerH} Z`;
+  const baselineY = toY(center);
+  const yTicks = [yMax, center, yMin];
+  const gradId = `bsLcGrad-${color.replace('#', '')}`;
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stopColor={color} stopOpacity="0.22"/>
+          <stop offset="100%" stopColor={color} stopOpacity="0"/>
+        </linearGradient>
+      </defs>
+      {yTicks.map((tv, i) => {
+        const y = toY(tv);
+        return (
+          <g key={i}>
+            <line x1={padL} y1={y} x2={width - padR} y2={y}
+              stroke={T.hairline} strokeWidth="1"
+              strokeDasharray={i === 1 ? '0' : '3 4'}/>
+            <text x={padL - 6} y={y + 3} textAnchor="end"
+              fontSize="9" fill={T.ink3} fontFamily={MONO}>
+              {(tv * 100).toFixed(0)}{unit}
+            </text>
+          </g>
+        );
+      })}
+      <path d={area} fill={`url(#${gradId})`}/>
+      <path d={d} fill="none" stroke={color} strokeWidth="2"
+        strokeLinecap="round" strokeLinejoin="round"/>
+      {segs.map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r={i === segs.length - 1 ? 3.5 : 2.2}
+          fill={i === segs.length - 1 ? '#fff' : color}
+          stroke={color} strokeWidth={i === segs.length - 1 ? 2 : 0}/>
+      ))}
+      {labels && labels.map((l, i) => (
+        <text key={i} x={toX(i)} y={height - 6} textAnchor="middle"
+          fontSize="9.5" fill={T.ink3} fontFamily={FONT}
+          fontWeight={i === labels.length - 1 ? 700 : 500}>
+          {l}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
 // ─── Avatar (initials) ────────────────────────────────────────────────────
 function Avatar({ name, size = 36, bg = T.ink, color = '#fff' }) {
   const initials = name.split(' ').map(n => n[0]).slice(0, 2).join('');
@@ -308,11 +377,11 @@ function HomeScreen({ onRunCheck, onOpenDashboard }) {
     h = h % 12 || 12;
     return `${h}:${m} ${ampm}`;
   });
-  const facePts = [0.92, 0.91, 0.93, 0.92, 0.94, 0.91, 0.93, 0.92, 0.94];
-  const voicePts = [0.89, 0.90, 0.89, 0.91, 0.90, 0.92, 0.90, 0.91, 0.90];
+  const facePts = [0.88, 0.93, 0.90, 0.95, 0.91, 0.94, 0.92, 0.96, 0.94];
+  const voicePts = [0.85, 0.91, 0.88, 0.92, 0.89, 0.93, 0.90, 0.92, 0.91];
 
   return (
-    <div style={{ paddingBottom: 110 }}>
+    <div style={{ height: '100%', overflow: 'hidden' }}>
       {/* Header */}
       <div style={{ padding: '8px 22px', display: 'flex', alignItems: 'center', gap: 12 }}>
         <Avatar name="Joan M" />
@@ -448,7 +517,7 @@ function SignalCard({ icon, title, points, time, onClick }) {
 function DashboardScreen({ onRunCheck, onBack }) {
   const [range, setRange] = useState('week');
   return (
-    <div style={{ paddingBottom: 110 }}>
+    <div style={{ height: '100%', overflow: 'hidden' }}>
       {/* Header */}
       <div style={{
         padding: '8px 22px 14px',
@@ -516,71 +585,39 @@ function DashboardScreen({ onRunCheck, onBack }) {
       </div>
 
       {/* Face trend card */}
-      <div style={{ padding: '14px 22px 0' }}>
+      <div style={{ padding: '12px 22px 0' }}>
         <TrendCard
           icon="face" title="Face symmetry"
-          points={[0.94, 0.93, 0.95, 0.94, 0.93, 0.94, 0.94]}
-          rows={[
-            { label: 'Smile symmetry', base: '96%', value: '96%' },
-            { label: 'Eye closure',    base: '92%', value: '92%' },
-            { label: 'Brow lift',      base: '90%', value: '88%' },
-          ]}
+          current="94%"
+          points={[0.92, 0.95, 0.93, 0.96, 0.94, 0.95, 0.94]}
+          labels={['M', 'T', 'W', 'T', 'F', 'S', 'S']}
         />
       </div>
 
       {/* Voice trend card */}
-      <div style={{ padding: '12px 22px 0' }}>
+      <div style={{ padding: '10px 22px 0' }}>
         <TrendCard
           icon="mic" title="Voice clarity"
-          points={[0.91, 0.90, 0.91, 0.90, 0.91, 0.91, 0.91]}
-          rows={[
-            { label: 'Clarity',        base: '91%',     value: '91%' },
-            { label: 'Speaking pace',  base: '138 wpm', value: '138 wpm' },
-            { label: 'Pause pattern',  base: '1.1/sent',value: '1.1/sent' },
-          ]}
+          current="91%"
+          points={[0.88, 0.92, 0.90, 0.93, 0.89, 0.91, 0.91]}
+          labels={['M', 'T', 'W', 'T', 'F', 'S', 'S']}
         />
       </div>
 
       {/* Recent checks */}
-      <div style={{ padding: '18px 22px 0' }}>
+      <div style={{ padding: '12px 22px 0' }}>
         <div style={{
           fontSize: 11, fontWeight: 600, color: T.ink3,
-          textTransform: 'uppercase', letterSpacing: 1.2, padding: '0 4px 10px',
+          textTransform: 'uppercase', letterSpacing: 1.2, padding: '0 4px 8px',
         }}>Recent checks</div>
         <div style={{
-          background: T.surface, borderRadius: 20, border: `1px solid ${T.hairline}`,
+          background: T.surface, borderRadius: 18, border: `1px solid ${T.hairline}`,
           overflow: 'hidden',
         }}>
-          <CheckRow kind="Active check" time="9:14 AM" note="3-second face + voice" active/>
+          <CheckRow kind="Active check" time="9:14 AM" note="Face + voice" active/>
           <Divider/>
           <CheckRow kind="Passive reading" time="8:42 AM" note="Background scan"/>
-          <Divider/>
-          <CheckRow kind="Passive reading" time="Yesterday" note="Background scan"/>
         </div>
-      </div>
-
-      {/* Care team */}
-      <div style={{ padding: '18px 22px 0' }}>
-        <div style={{
-          fontSize: 11, fontWeight: 600, color: T.ink3,
-          textTransform: 'uppercase', letterSpacing: 1.2, padding: '0 4px 10px',
-        }}>Care team</div>
-        <div style={{
-          background: T.surface, borderRadius: 20, border: `1px solid ${T.hairline}`,
-          overflow: 'hidden',
-        }}>
-          <ContactRow name="Dr. Patel"      role="Neurologist" share="Urgent only"/>
-          <Divider/>
-          <ContactRow name="Mia (daughter)" role="Family"      share="All results"/>
-        </div>
-        <button style={{
-          marginTop: 10, width: '100%', padding: '12px 16px', borderRadius: 999,
-          background: 'transparent', border: `1px dashed ${T.hairlineStr}`,
-          fontFamily: FONT, fontSize: 13, fontWeight: 600, color: T.ink2, cursor: 'pointer',
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-        }}>
-          <Icon name="plus" size={14} color={T.ink2}/> Add contact
-        </button>
       </div>
 
       <RunCheckFab onClick={onRunCheck}/>
@@ -588,53 +625,45 @@ function DashboardScreen({ onRunCheck, onBack }) {
   );
 }
 
-function TrendCard({ icon, title, points, rows }) {
+function TrendCard({ icon, title, points, labels, current }) {
   return (
     <div style={{
-      background: T.surface, borderRadius: T.radiusCard, padding: 18,
+      background: T.surface, borderRadius: T.radiusCard, padding: 16,
       border: `1px solid ${T.hairline}`,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
         <div style={{
-          width: 28, height: 28, borderRadius: 8, background: T.appBg,
+          width: 26, height: 26, borderRadius: 8, background: T.appBg,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
-          <Icon name={icon} size={15} color={T.ink2}/>
+          <Icon name={icon} size={14} color={T.ink2}/>
         </div>
-        <span style={{ flex: 1, fontSize: 14, fontWeight: 600, color: T.ink }}>{title}</span>
-        <StatusPill size="sm"/>
+        <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: T.ink }}>{title}</span>
+        <span style={{
+          fontSize: 18, fontWeight: 700, color: T.ink,
+          fontVariantNumeric: 'tabular-nums', letterSpacing: -0.4,
+        }}>{current}</span>
+        <span style={{ fontSize: 11, fontWeight: 600, color: T.ok }}>±0</span>
       </div>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-          <span style={{
-            fontSize: 40, fontWeight: 600, color: T.ink, lineHeight: 1,
-            fontVariantNumeric: 'tabular-nums', letterSpacing: -1,
-          }}>0</span>
-          <span style={{ fontSize: 12, color: T.ink3 }}>% from baseline</span>
-        </div>
-        <div style={{ width: 130, height: 48 }}>
-          <Sparkline points={points} color={T.ink2} width={130} height={48}/>
-        </div>
-      </div>
-      <div style={{ display: 'grid', gap: 6 }}>
-        {rows.map((r, i) => (
-          <div key={i} style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '8px 10px', borderRadius: 10, background: T.appBg,
-          }}>
-            <span style={{ fontSize: 12.5, color: T.ink2 }}>{r.label}</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 11, color: T.ink3, fontFamily: MONO, fontVariantNumeric: 'tabular-nums' }}>
-                vs {r.base}
-              </span>
-              <span style={{
-                fontSize: 12.5, fontWeight: 700, color: T.ink, fontVariantNumeric: 'tabular-nums',
-              }}>{r.value}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: T.ink3 }}>±0</span>
-            </div>
-          </div>
-        ))}
-      </div>
+      <ChartContainer points={points} labels={labels}/>
+    </div>
+  );
+}
+
+function ChartContainer({ points, labels }) {
+  const ref = useRef(null);
+  const [w, setW] = useState(320);
+  useEffect(() => {
+    if (!ref.current) return;
+    const update = () => setW(ref.current ? ref.current.clientWidth : 320);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+  return (
+    <div ref={ref} style={{ width: '100%', height: 110 }}>
+      <LineChart points={points} labels={labels} width={w} height={110}/>
     </div>
   );
 }
@@ -661,26 +690,6 @@ function CheckRow({ kind, time, note, active }) {
         <div style={{ fontSize: 12, color: T.ink3, marginTop: 2 }}>{note}</div>
       </div>
       <StatusPill size="sm"/>
-    </div>
-  );
-}
-
-function ContactRow({ name, role, share }) {
-  const colorByRole = role === 'Neurologist' ? '#3F72AF' : '#7A92B5';
-  return (
-    <div style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
-      <Avatar name={name} bg={colorByRole}/>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 600, color: T.ink, lineHeight: 1.2 }}>{name}</div>
-        <div style={{ fontSize: 12, color: T.ink3, marginTop: 2 }}>{role}</div>
-      </div>
-      <div style={{ textAlign: 'right' }}>
-        <div style={{
-          fontSize: 10.5, fontWeight: 600, color: T.ink3,
-          textTransform: 'uppercase', letterSpacing: 0.8,
-        }}>Shares</div>
-        <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink2, marginTop: 2 }}>{share}</div>
-      </div>
     </div>
   );
 }
@@ -1164,16 +1173,22 @@ export default function BrainSentry() {
 
   return (
     <>
-      <style>{GLOBAL_CSS}</style>
+      <style>{GLOBAL_CSS}{`
+        html, body, #root { height: 100%; margin: 0; overflow: hidden; }
+        body { background: ${T.appBg}; }
+      `}</style>
       <div style={{
-        maxWidth: 430, margin: '0 auto', minHeight: '100vh',
+        maxWidth: 430, margin: '0 auto', height: '100vh',
         background: T.appBg, color: T.ink, fontFamily: FONT,
         position: 'relative', overflow: 'hidden',
       }}>
         <div style={{ paddingTop: 24 }}/>
         <div
           key={page}
-          style={{ animation: 'bsFade 240ms ease-out both' }}
+          style={{
+            animation: 'bsFade 240ms ease-out both',
+            position: 'absolute', inset: '24px 0 0 0', overflow: 'hidden',
+          }}
         >
           {content}
         </div>
