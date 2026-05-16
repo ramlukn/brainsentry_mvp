@@ -453,20 +453,23 @@ function HomeScreen({ onRunCheck, onOpenDashboard }) {
     <div style={{ height: '100%', overflow: 'hidden' }}>
       {/* Header */}
       <div style={{ padding: '8px 22px', display: 'flex', alignItems: 'center', gap: 12 }}>
-        <Avatar name="Joan M" />
+        <Avatar name="Kee P" />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontSize: 11, fontWeight: 600, color: T.ink3,
             textTransform: 'uppercase', letterSpacing: 1.4, lineHeight: 1.2,
           }}>Good morning</div>
-          <div style={{ fontSize: 15, fontWeight: 600, color: T.ink, lineHeight: 1.2 }}>Joan</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: T.ink, lineHeight: 1.2 }}>Kee</div>
         </div>
-        <button style={{
-          width: 36, height: 36, borderRadius: '50%', background: T.surface,
-          border: `1px solid ${T.hairline}`, display: 'flex', alignItems: 'center',
-          justifyContent: 'center', cursor: 'pointer', padding: 0,
+        <button aria-label="Kemenkes" style={{
+          width: 40, height: 40, background: 'transparent', border: 'none',
+          padding: 0, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
-          <Icon name="settings" size={18} color={T.ink2}/>
+          <svg viewBox="47 -2 106 117" width="36" height="40" style={{ display: 'block' }}>
+            <path fill="#09b9a4" fillRule="evenodd" d="m87.2 61.3v34.7c0 9.4 7.7 17.1 17.1 17.1 9.4 0 17.2-7.7 17.2-17.1v-0.4zm0-43.7v34.7l34.2-34.3v-0.4c0-9.4-7.7-17.1-17.1-17.1-9.4 0-17.1 7.7-17.1 17.1zm-21.5 56.3h17.9v-34.2h-17.9c-9.4 0-17.1 7.7-17.1 17.1 0 9.4 7.7 17.1 17.1 17.1z"/>
+            <path fill="#cedc27" fillRule="evenodd" d="m121.5 23.1v32h-32.1zm3.5-3.5c6.4-5.9 16.4-5.7 22.6 0.5 6.4 6.3 6.4 16.7 0 23l-11.9 12h-10.7zm10.7 39l11.9 12c6.4 6.3 6.4 16.7 0 23.1-6.2 6.2-16.2 6.3-22.6 0.4v-35.5zm-14.1 0v32.1l-32-32.1z"/>
+          </svg>
         </button>
       </div>
 
