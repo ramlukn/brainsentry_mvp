@@ -249,35 +249,37 @@ function Avatar({ name, size = 36, bg = T.ink, color = '#fff' }) {
 }
 
 // ─── Waveform (voice) ─────────────────────────────────────────────────────
-function Waveform({ active, height = 56, bars = 20 }) {
+function Waveform({ active, levels, height = 56, bars = 20 }) {
+  // When real `levels` are supplied, render them directly. Otherwise fall back
+  // to a placeholder (simulated jitter when active, low idle bars when not).
   const [tick, setTick] = useState(0);
   useEffect(() => {
-    if (!active) return;
+    if (!active || levels) return;
     const id = setInterval(() => setTick(t => t + 1), 80);
     return () => clearInterval(id);
-  }, [active]);
+  }, [active, levels]);
 
+  const n = levels ? levels.length : bars;
   const seeds = useMemo(
-    () => Array.from({ length: bars }, (_, i) => 0.3 + 0.7 * Math.abs(Math.sin(i * 1.7 + 0.5))),
-    [bars]
+    () => Array.from({ length: n }, (_, i) => 0.3 + 0.7 * Math.abs(Math.sin(i * 1.7 + 0.5))),
+    [n]
   );
-  // Live jitter recomputed each tick when active
-  const liveHeights = useMemo(
-    () => seeds.map((s, i) => active ? Math.min(1, s * (0.55 + Math.random() * 0.5)) : 0.18 + s * 0.12),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tick, active, seeds]
-  );
+  const heights = levels
+    ? levels
+    : seeds.map(s => active ? Math.min(1, s * (0.55 + Math.random() * 0.5)) : 0.18 + s * 0.12);
+  // tick is only read to drive re-renders in the simulated branch
+  void tick;
   return (
     <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
-      {liveHeights.map((h, i) => (
+      {heights.map((h, i) => (
         <span key={i} style={{
           flex: 1, height: '100%',
           background: active ? T.ink : T.ink4,
           borderRadius: 4,
-          transform: `scaleY(${h})`,
+          transform: `scaleY(${Math.max(0.06, Math.min(1, h))})`,
           transformOrigin: 'center',
-          transition: active ? 'transform 80ms linear' : 'transform 200ms ease',
-          opacity: active ? 0.65 + 0.35 * h : 0.55,
+          transition: 'transform 60ms linear',
+          opacity: active ? 0.55 + 0.45 * Math.min(1, h) : 0.55,
         }}/>
       ))}
     </div>
@@ -950,10 +952,103 @@ function QualityChip({ icon, label, value, ok, mono }) {
 }
 
 // ─── VOICE TEST SCREEN ────────────────────────────────────────────────────
+const WAVE_BARS = 22;
+
 function VoiceTestScreen({ onComplete, onClose }) {
   const [recording, setRecording] = useState(false);
   const [secs, setSecs] = useState(0);
+  const [levels, setLevels] = useState(() => Array(WAVE_BARS).fill(0.05));
+  const [rms, setRms] = useState(0);
+  const [micError, setMicError] = useState(false);
+  const mountedRef = useRef(true);
+  const streamRef = useRef(null);
+  const ctxRef = useRef(null);
+  const analyserRef = useRef(null);
+  const rafRef = useRef(null);
 
+  // Acquire mic on mount; keep stream alive for the lifetime of the screen so
+  // the waveform reflects real input both before and during recording.
+  useEffect(() => {
+    mountedRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new Ctx();
+        ctxRef.current = ctx;
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 128;
+        analyser.smoothingTimeConstant = 0.5;
+        source.connect(analyser);
+        analyserRef.current = analyser;
+
+        const freq = new Uint8Array(analyser.frequencyBinCount);
+        const time = new Uint8Array(analyser.fftSize);
+        const loop = () => {
+          if (!mountedRef.current || !analyserRef.current) return;
+          analyserRef.current.getByteFrequencyData(freq);
+          analyserRef.current.getByteTimeDomainData(time);
+
+          // Build half the bars from low→high frequency buckets, then mirror
+          // them around the centre so loud (voice-band) energy radiates from
+          // the middle outward.
+          const HALF = Math.floor(WAVE_BARS / 2);
+          const usable = Math.floor(freq.length * 0.7);
+          const step = Math.max(1, Math.floor(usable / HALF));
+          const half = new Array(HALF);
+          for (let i = 0; i < HALF; i++) {
+            let sum = 0, n = 0;
+            for (let j = i * step; j < (i + 1) * step && j < usable; j++) {
+              sum += freq[j]; n++;
+            }
+            const avg = n ? sum / n : 0;
+            // Soft taper outward — emphasises the centre while keeping edges live.
+            const envelope = 1 - 0.35 * (i / Math.max(1, HALF - 1));
+            half[i] = Math.min(1, ((avg / 255) * 1.9 * envelope) + 0.04);
+          }
+          const out = new Array(WAVE_BARS);
+          const centerIdx = (WAVE_BARS - 1) / 2;
+          for (let i = 0; i < WAVE_BARS; i++) {
+            const d = Math.min(HALF - 1, Math.floor(Math.abs(i - centerIdx)));
+            out[i] = half[d];
+          }
+
+          // RMS over time-domain (centred at 128) → 0..~0.5 in practice.
+          let sumSq = 0;
+          for (let i = 0; i < time.length; i++) {
+            const v = (time[i] - 128) / 128;
+            sumSq += v * v;
+          }
+          const r = Math.sqrt(sumSq / time.length);
+
+          setLevels(out);
+          setRms(r);
+          rafRef.current = requestAnimationFrame(loop);
+        };
+        rafRef.current = requestAnimationFrame(loop);
+      } catch (e) {
+        if (!cancelled) setMicError(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      mountedRef.current = false;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      if (ctxRef.current) ctxRef.current.close().catch(() => {});
+      streamRef.current = null;
+      ctxRef.current = null;
+      analyserRef.current = null;
+    };
+  }, []);
+
+  // Recording countdown
   useEffect(() => {
     if (!recording) return;
     if (secs >= 4.5) {
@@ -963,6 +1058,20 @@ function VoiceTestScreen({ onComplete, onClose }) {
     const t = setTimeout(() => setSecs(s => +(s + 0.1).toFixed(1)), 100);
     return () => clearTimeout(t);
   }, [recording, secs, onComplete]);
+
+  // Ambient classification from RMS while idle; during recording the same
+  // value reads as input loudness instead.
+  const ambient = micError
+    ? { label: 'Mic unavailable', color: T.ink3 }
+    : recording
+      ? (rms > 0.04
+          ? { label: 'Input · Detected', color: T.ok }
+          : { label: 'Input · Speak up',  color: T.ink3 })
+      : (rms > 0.12
+          ? { label: 'Background · Noisy', color: '#C36F2E' }
+          : rms > 0.04
+            ? { label: 'Background · Moderate', color: T.ink3 }
+            : { label: 'Background · Quiet',    color: T.ok });
 
   return (
     <div>
@@ -1001,15 +1110,15 @@ function VoiceTestScreen({ onComplete, onClose }) {
             marginBottom: 14,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Icon name="sound" size={14} color={T.ok}/>
-              <span style={{ fontSize: 12, color: T.ok, fontWeight: 600 }}>Background · Quiet</span>
+              <Icon name="sound" size={14} color={ambient.color}/>
+              <span style={{ fontSize: 12, color: ambient.color, fontWeight: 600 }}>{ambient.label}</span>
             </div>
             <span style={{
               fontFamily: MONO, fontSize: 12, color: T.ink3, fontVariantNumeric: 'tabular-nums',
             }}>{secs.toFixed(1)}s / 4.5s</span>
           </div>
 
-          <Waveform active={recording} height={56}/>
+          <Waveform active={recording} levels={micError ? null : levels} height={56}/>
 
           <div style={{
             marginTop: 16, height: 6, borderRadius: 3,
