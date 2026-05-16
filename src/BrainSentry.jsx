@@ -199,7 +199,7 @@ function Sparkline({ points, color = T.ink2, width = 140, height = 40 }) {
 // with at least ±5% headroom so the line has room to breathe.
 function LineChart({ points, labels, color = T.ink2, width = 300, height = 130 }) {
   if (!points || points.length < 2) return null;
-  const padL = 44, padR = 10, padT = 12, padB = 22;
+  const padL = 56, padR = 10, padT = 12, padB = 22;
   const innerW = width - padL - padR;
   const innerH = height - padT - padB;
   const maxAbs = Math.max(0.05, ...points.map((p) => Math.abs(p)));
@@ -572,7 +572,7 @@ function SignalCard({ icon, title, points, time, onClick }) {
           fontSize: 32, fontWeight: 600, color: T.ink, lineHeight: 1,
           fontVariantNumeric: 'tabular-nums',
         }}>0</span>
-        <span style={{ fontSize: 11, color: T.ink3 }}>% from base</span>
+        <span style={{ fontSize: 11, color: T.ink3 }}>% from baseline</span>
       </div>
       <div style={{ height: 36 }}>
         <Sparkline points={points} color={T.ink2} width={140} height={36}/>
@@ -758,7 +758,7 @@ function TrendCard({ icon, title, points, labels }) {
         <span style={{
           fontSize: 10.5, fontWeight: 600, color: T.ink3,
           textTransform: 'uppercase', letterSpacing: 0.4,
-        }}>vs base</span>
+        }}>vs baseline</span>
       </div>
       <ChartContainer points={points} labels={labels}/>
     </div>
