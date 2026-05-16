@@ -184,17 +184,69 @@ function CornerBrackets() {
   );
 }
 
-function ProgressBar({ durationMs }) {
+// ── Animated ECG trace standing in for the progress bar ──────────────────
+// Generates a string of `beats` P-QRS-T cycles across `w` units in `h` units
+// of height, then reveals the whole line left-to-right over the duration.
+function makeEcgPath(beats, w, h) {
+  const cyc = w / beats;
+  const mid = h / 2;
+  let d = `M 0 ${mid}`;
+  for (let i = 0; i < beats; i++) {
+    const x = i * cyc;
+    // P wave
+    d += ` L ${x + 0.10 * cyc} ${mid}`;
+    d += ` L ${x + 0.13 * cyc} ${mid - 2}`;
+    d += ` L ${x + 0.16 * cyc} ${mid}`;
+    // Flat to Q
+    d += ` L ${x + 0.28 * cyc} ${mid}`;
+    // Q · R · S spike
+    d += ` L ${x + 0.30 * cyc} ${mid + 1.5}`;
+    d += ` L ${x + 0.32 * cyc} ${mid - 12}`;
+    d += ` L ${x + 0.34 * cyc} ${mid + 4}`;
+    d += ` L ${x + 0.40 * cyc} ${mid}`;
+    // T wave
+    d += ` L ${x + 0.55 * cyc} ${mid - 3}`;
+    d += ` L ${x + 0.62 * cyc} ${mid}`;
+    // Flat to end of cycle
+    d += ` L ${x + cyc} ${mid}`;
+  }
+  return d;
+}
+
+function HeartbeatLine({ durationMs }) {
+  const W = 310, H = 26, BEATS = 4;
+  const d = useMemo(() => makeEcgPath(BEATS, W, H), []);
   return (
     <div style={{
-      position: 'absolute', left: 60, right: 60, bottom: 90,
-      height: 2, background: 'rgba(17,45,78,0.10)', borderRadius: 2, overflow: 'hidden',
+      position: 'absolute', left: 60, right: 60, bottom: 84,
+      height: H, pointerEvents: 'none',
     }}>
-      <div style={{
-        height: '100%', background: INK,
-        animation: `bsAnalyzingBar ${durationMs}ms linear forwards`,
-      }}/>
-      <style>{`@keyframes bsAnalyzingBar { from { width: 0%; } to { width: 100%; } }`}</style>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        width="100%"
+        height={H}
+        style={{ display: 'block', overflow: 'visible' }}
+      >
+        {/* faint baseline so the line has a visual track */}
+        <line x1="0" y1={H / 2} x2={W} y2={H / 2}
+          stroke="rgba(17,45,78,0.10)" strokeWidth="1"/>
+        <path
+          d={d}
+          fill="none"
+          stroke={INK}
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          pathLength="100"
+          style={{
+            strokeDasharray: '100',
+            strokeDashoffset: '100',
+            animation: `bsEcgTrace ${durationMs}ms linear forwards`,
+          }}
+        />
+      </svg>
+      <style>{`@keyframes bsEcgTrace { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }`}</style>
     </div>
   );
 }
@@ -224,7 +276,7 @@ export default function AnalyzingScreen({ onComplete }) {
       fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif',
     }}>
       <Canvas
-        camera={{ position: [0, 0.30, 6.2], fov: 28 }}
+        camera={{ position: [0, 0.30, 7.6], fov: 28 }}
         style={{ position: 'absolute', inset: 0 }}
         dpr={[1, 2]}
         gl={{ antialias: true, alpha: true }}
@@ -276,7 +328,7 @@ export default function AnalyzingScreen({ onComplete }) {
         </div>
       </div>
 
-      <ProgressBar durationMs={DURATION_MS}/>
+      <HeartbeatLine durationMs={DURATION_MS}/>
     </div>
   );
 }
