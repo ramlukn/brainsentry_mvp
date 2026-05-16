@@ -12,6 +12,9 @@ const INK    = '#112D4E';
 const INK2   = '#3F72AF';
 const INK3   = '#7A92B5';
 const HOT    = '#C36F2E';
+// Slightly brighter blue used for the flares so they pop against navy
+// continents without leaving the palette.
+const SIGNAL = '#5891D6';
 
 const AXIAL_TILT_RAD = (23.5 * Math.PI) / 180; // Earth's axial tilt
 
@@ -97,14 +100,85 @@ function AnimatedArc({ from, to, color = INK2, drawMs = 1600, holdMs = 700, phas
   );
 }
 
-// ── Endpoint marker (a tiny glowing dot) ──────────────────────────────────
-function CityDot({ lat, lng, color = INK2 }) {
-  const pos = useMemo(() => latLngToVec3(lat, lng, 1.005), [lat, lng]);
+// ── Flare: pulsing core + expanding halo on the globe surface ────────────
+function Flare({ lat, lng, color = SIGNAL, phase = 0, speed = 1.2, core = 0.028, haloMax = 5.0 }) {
+  const pos = useMemo(() => latLngToVec3(lat, lng, 1.012), [lat, lng]);
+  const coreRef = useRef();
+  const haloRef = useRef();
+
+  useFrame(({ clock }) => {
+    if (!coreRef.current || !haloRef.current) return;
+    const t = clock.elapsedTime * speed + phase;
+    const pulse = (Math.sin(t) + 1) / 2; // 0..1
+
+    coreRef.current.material.emissiveIntensity = 2 + pulse * 2.5;
+    coreRef.current.scale.setScalar(0.9 + pulse * 0.2);
+
+    const grow = 1 + pulse * (haloMax - 1);
+    haloRef.current.scale.setScalar(grow);
+    haloRef.current.material.opacity = 0.55 * (1 - pulse);
+  });
+
   return (
-    <mesh position={pos}>
-      <sphereGeometry args={[0.018, 16, 16]}/>
-      <meshBasicMaterial color={color} toneMapped={false}/>
-    </mesh>
+    <group position={pos}>
+      <mesh ref={coreRef} renderOrder={1}>
+        <sphereGeometry args={[core, 20, 20]}/>
+        <meshStandardMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={3}
+          toneMapped={false}
+          depthTest={false}
+        />
+      </mesh>
+      <mesh ref={haloRef} renderOrder={0}>
+        <sphereGeometry args={[core * 1.6, 20, 20]}/>
+        <meshBasicMaterial
+          color={color}
+          transparent
+          opacity={0.5}
+          toneMapped={false}
+          depthWrite={false}
+          depthTest={false}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+// ── Clean lat/long graticule: 12 meridians + 5 parallels ──────────────────
+function Graticule({ color = INK2, opacity = 0.16 }) {
+  const meridians = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < 12; i++) {
+      const lng = i * 30 - 180;
+      const pts = [];
+      for (let lat = -85; lat <= 85; lat += 5) pts.push(latLngToVec3(lat, lng, 1));
+      out.push(pts);
+    }
+    return out;
+  }, []);
+  const parallels = useMemo(() => {
+    const out = [];
+    [-60, -30, 0, 30, 60].forEach((lat) => {
+      const pts = [];
+      for (let lng = -180; lng <= 180; lng += 5) pts.push(latLngToVec3(lat, lng, 1));
+      out.push(pts);
+    });
+    return out;
+  }, []);
+  return (
+    <>
+      {meridians.map((pts, i) => (
+        <Line key={`m${i}`} points={pts} color={color}
+          lineWidth={0.7} transparent opacity={opacity} depthWrite={false}/>
+      ))}
+      {parallels.map((pts, i) => (
+        <Line key={`p${i}`} points={pts} color={color}
+          lineWidth={i === 2 ? 1.0 : 0.7} // emphasise the equator slightly
+          transparent opacity={i === 2 ? opacity + 0.04 : opacity} depthWrite={false}/>
+      ))}
+    </>
   );
 }
 
@@ -134,24 +208,33 @@ function useContinentRings(r) {
 function EarthGlobe() {
   const rings = useContinentRings(1.002);
   const spin = useRef();
+  // Start with Indonesia (~110°E) facing the camera so the flares are
+  // immediately visible during the 2.5s analyzing screen.
+  useEffect(() => {
+    if (spin.current) spin.current.rotation.y = Math.PI;
+  }, []);
   useFrame((_, dt) => {
     if (spin.current) spin.current.rotation.y += dt * 0.15;
   });
 
   return (
     <group rotation={[0, 0, AXIAL_TILT_RAD]} position={[0, 1.5, 0]}>
+      {/* Atmospheric rim glow: a slightly larger BackSide sphere only shows
+          at the silhouette of the globe, producing a soft halo. */}
+      <mesh scale={1.06}>
+        <sphereGeometry args={[1, 64, 64]}/>
+        <meshBasicMaterial
+          color={SIGNAL}
+          side={THREE.BackSide}
+          transparent
+          opacity={0.10}
+          depthWrite={false}
+        />
+      </mesh>
+
       <group ref={spin}>
-        {/* Almost-transparent latitude/longitude wireframe — the globe itself */}
-        <mesh>
-          <sphereGeometry args={[1, 32, 22]} />
-          <meshBasicMaterial
-            color={INK2}
-            wireframe
-            transparent
-            opacity={0.14}
-            depthWrite={false}
-          />
-        </mesh>
+        {/* Sparse lat/long graticule replaces the noisy triangulated wireframe */}
+        <Graticule color={INK2} opacity={0.16}/>
 
         {/* Continent outlines drawn as 3D polylines */}
         {rings.map((points, i) => (
@@ -167,9 +250,12 @@ function EarthGlobe() {
           />
         ))}
 
-        {/* Endpoint markers */}
-        <CityDot lat={CITIES.boston.lat}  lng={CITIES.boston.lng}/>
-        <CityDot lat={CITIES.jakarta.lat} lng={CITIES.jakarta.lng}/>
+        {/* Four intentional flares: Boston (arc origin) + spread across the
+            Indonesian archipelago so they're spatially distinct. */}
+        <Flare lat={CITIES.boston.lat}  lng={CITIES.boston.lng}  phase={0.0}/>
+        <Flare lat={CITIES.jakarta.lat} lng={CITIES.jakarta.lng} phase={0.7}/>  {/* Jakarta (Java) */}
+        <Flare lat={ 3.59}              lng={ 98.67}             phase={1.6}/>  {/* Medan (Sumatra) */}
+        <Flare lat={-5.13}              lng={119.41}             phase={2.5}/>  {/* Makassar (Sulawesi) */}
 
         {/* Animated arc — Boston → Jakarta */}
         <AnimatedArc from={CITIES.boston} to={CITIES.jakarta} phaseMs={0}/>
