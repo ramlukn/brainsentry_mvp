@@ -1,173 +1,181 @@
-import React, { useEffect, useMemo, useRef, useState, Suspense } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { useGLTF } from '@react-three/drei';
+import { Line } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import * as THREE from 'three';
-
-// ── Procedural cortex-bump geometry ───────────────────────────────────────
-// Multi-octave pseudo-noise (no external dep). High-frequency components are
-// weighted heavily so the surface reads as cortex ridges, not a wobbly blob.
-function brainNoise(x, y, z, seed) {
-  const a = Math.sin(x * 4   + seed)  * Math.cos(y * 3.5)         * Math.sin(z * 4);
-  const b = Math.sin(x * 11  + 1.5)   * Math.cos(y * 10 - seed)   * Math.sin(z * 11);
-  const c = Math.sin(x * 22  + 2.7)   * Math.cos(y * 20)          * Math.sin(z * 22 + seed);
-  return 0.30 * a + 0.40 * b + 0.30 * c;
-}
-
-function makeHemisphereGeometry({ seed = 0, amount = 0.16 } = {}) {
-  const g = new THREE.SphereGeometry(1, 192, 192);
-  const pos = g.attributes.position;
-  const v = new THREE.Vector3();
-  for (let i = 0; i < pos.count; i++) {
-    v.fromBufferAttribute(pos, i);
-    const n = brainNoise(v.x, v.y, v.z, seed);
-    const r = 1 + n * amount;
-    pos.setXYZ(i, v.x * r, v.y * r, v.z * r);
-  }
-  g.computeVertexNormals();
-  return g;
-}
+import { feature } from 'topojson-client';
+import landTopo from 'world-atlas/land-110m.json';
 
 // Palette aligned with BrainSentry tokens
-const APP_BG    = '#F9F7F7';
-const BRAIN     = '#3F72AF'; // T.ink2
-const BRAIN_HI  = '#7A92B5'; // T.ink3 — secondary tint for depth
-const INK       = '#112D4E';
-const INK2      = '#3F72AF';
-const INK3      = '#7A92B5';
-const HOT       = '#C36F2E'; // warm activation accent
+const APP_BG = '#F9F7F7';
+const INK    = '#112D4E';
+const INK2   = '#3F72AF';
+const INK3   = '#7A92B5';
+const HOT    = '#C36F2E';
 
-// ── Brain mesh from /brain.glb (when supplied) ────────────────────────────
-function BrainModel() {
-  const { scene } = useGLTF('/brain.glb');
-  const ref = useRef();
-  useFrame((_, dt) => { if (ref.current) ref.current.rotation.y += dt * 0.22; });
+const AXIAL_TILT_RAD = (23.5 * Math.PI) / 180; // Earth's axial tilt
 
-  // Recolor whatever the .glb ships with to match the BrainSentry palette.
-  useEffect(() => {
-    scene.traverse((o) => {
-      if (o.isMesh) {
-        o.material = new THREE.MeshStandardMaterial({
-          color: BRAIN,
-          roughness: 0.45,
-          metalness: 0.05,
-        });
-      }
-    });
-  }, [scene]);
-
-  return <primitive ref={ref} object={scene} scale={1.6} position={[0, -0.1, 0]} />;
+// ── lat/lng (degrees) → 3D position on a sphere of radius r ──────────────
+function latLngToVec3(lat, lng, r = 1) {
+  const phi = ((90 - lat) * Math.PI) / 180;
+  const theta = ((lng + 180) * Math.PI) / 180;
+  return [
+    -r * Math.sin(phi) * Math.cos(theta),
+     r * Math.cos(phi),
+     r * Math.sin(phi) * Math.sin(theta),
+  ];
 }
 
-// ── Procedural fallback brain ─────────────────────────────────────────────
-// Two noise-displaced hemispheres with a longitudinal fissure, plus a small
-// cerebellum + brain-stem. Looks recognisably brain-like; no asset required.
-function FallbackBrain() {
-  const ref = useRef();
-  const leftGeom  = useMemo(() => makeHemisphereGeometry({ seed: 0,  amount: 0.13 }), []);
-  const rightGeom = useMemo(() => makeHemisphereGeometry({ seed: 19, amount: 0.13 }), []);
-  const cerebGeom = useMemo(() => makeHemisphereGeometry({ seed: 7,  amount: 0.08 }), []);
+// ── Great-circle arc between two surface points, bowed outward ────────────
+function arcPoints(p1, p2, height = 0.32, segments = 96) {
+  const v1 = new THREE.Vector3(...p1);
+  const v2 = new THREE.Vector3(...p2);
+  const angle = v1.angleTo(v2);
+  const axis = new THREE.Vector3().crossVectors(v1, v2).normalize();
+  const out = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const p = v1.clone().applyAxisAngle(axis, t * angle);
+    const lift = Math.sin(t * Math.PI) * height;
+    p.multiplyScalar(1 + lift);
+    out.push([p.x, p.y, p.z]);
+  }
+  return out;
+}
 
-  useFrame((_, dt) => { if (ref.current) ref.current.rotation.y += dt * 0.22; });
+// ── City coordinates (lat, lng in degrees) ────────────────────────────────
+const CITIES = {
+  boston:  { lat:  42.36, lng:  -71.06 },
+  jakarta: { lat:  -6.21, lng:  106.85 },
+  geneva:  { lat:  46.20, lng:    6.14 },
+};
 
-  // depthWrite: true so the displaced cortex back-faces are correctly occluded
-  // by front-faces — without it the noise ridges stack visibly as contour rings.
-  const cortex = useMemo(() => new THREE.MeshStandardMaterial({
-    color: BRAIN, roughness: 0.55, metalness: 0.04,
-    transparent: true, opacity: 0.62,
-  }), []);
-  const cortexAlt = useMemo(() => new THREE.MeshStandardMaterial({
-    color: BRAIN_HI, roughness: 0.6, metalness: 0.04,
-    transparent: true, opacity: 0.7,
-  }), []);
+// ── A drawing-in arc between two cities, looping ──────────────────────────
+function AnimatedArc({ from, to, color = INK2, drawMs = 1600, holdMs = 700, phaseMs = 0 }) {
+  const points = useMemo(() => {
+    const p1 = latLngToVec3(from.lat, from.lng, 1);
+    const p2 = latLngToVec3(to.lat,   to.lng,   1);
+    return arcPoints(p1, p2, 0.32, 96);
+  }, [from, to]);
+
+  // Total arc length so the dash math is in world units.
+  const total = useMemo(() => {
+    let l = 0;
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1], b = points[i];
+      l += Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    }
+    return l;
+  }, [points]);
+
+  const lineRef = useRef();
+
+  useFrame(({ clock }) => {
+    const line = lineRef.current;
+    if (!line || !line.material) return;
+    const cycle = drawMs + holdMs;
+    const tMs = ((clock.elapsedTime * 1000 + phaseMs) % cycle);
+    const progress = Math.min(1, tMs / drawMs);
+    line.material.dashSize = total * progress + 0.0001;
+    line.material.gapSize  = total * (1 - progress) + 0.0001;
+  });
 
   return (
-    <group ref={ref} rotation={[0.08, 0, 0]} scale={0.78} position={[0, 0.32, 0]}>
-      {/* Left hemisphere */}
-      <mesh
-        geometry={leftGeom}
-        material={cortex}
-        position={[-0.22, 0.02, 0]}
-        rotation={[0, 0, -0.05]}
-        scale={[0.78, 0.78, 1.05]}
-      />
-      {/* Right hemisphere — gap between the two creates the longitudinal fissure */}
-      <mesh
-        geometry={rightGeom}
-        material={cortex}
-        position={[ 0.22, 0.02, 0]}
-        rotation={[0, 0, 0.05]}
-        scale={[0.78, 0.78, 1.05]}
-      />
-      {/* Cerebellum */}
-      <mesh
-        geometry={cerebGeom}
-        material={cortexAlt}
-        position={[0, -0.55, -0.55]}
-        scale={[0.5, 0.34, 0.5]}
-      />
-      {/* Brain stem */}
-      <mesh position={[0, -0.82, -0.38]} rotation={[0.55, 0, 0]}>
-        <cylinderGeometry args={[0.09, 0.12, 0.4, 32]} />
-        <meshStandardMaterial
-          color={BRAIN_HI} roughness={0.55} metalness={0.04}
-          transparent opacity={0.7}
-        />
-      </mesh>
-    </group>
+    <Line
+      ref={lineRef}
+      points={points}
+      color={color}
+      lineWidth={1.8}
+      transparent
+      opacity={0.95}
+      toneMapped={false}
+      dashed
+      dashScale={1}
+      dashSize={0.001}
+      gapSize={total}
+    />
   );
 }
 
-// ── Glow regions inside the brain (visible through the translucent cortex)
-function GlowRegion({ position, phase, radius = 0.18, color = HOT, speed = 0.85 }) {
-  const ref = useRef();
-  useFrame(({ clock }) => {
-    if (!ref.current) return;
-    const t = clock.elapsedTime + phase;
-    const pulse = 0.5 + 0.5 * Math.sin(t * speed);
-    ref.current.material.emissiveIntensity = 0.4 + pulse * 1.6;
-    ref.current.scale.setScalar(0.7 + pulse * 0.4);
-    ref.current.material.opacity = 0.35 + pulse * 0.4;
-  });
+// ── Endpoint marker (a tiny glowing dot) ──────────────────────────────────
+function CityDot({ lat, lng, color = INK2 }) {
+  const pos = useMemo(() => latLngToVec3(lat, lng, 1.005), [lat, lng]);
   return (
-    <mesh position={position} ref={ref} renderOrder={-1}>
-      <sphereGeometry args={[radius, 32, 32]} />
-      <meshStandardMaterial
-        color={color}
-        emissive={color}
-        emissiveIntensity={1.2}
-        toneMapped={false}
-        transparent
-        opacity={0.5}
-        depthWrite={false}
-        depthTest={false}
-      />
+    <mesh position={pos}>
+      <sphereGeometry args={[0.018, 16, 16]}/>
+      <meshBasicMaterial color={color} toneMapped={false}/>
     </mesh>
   );
 }
 
-function GlowRegions() {
-  // Diffuse internal "activations" at staggered phases so the brain
-  // appears to light up in different areas over time.
-  return (
-    <>
-      <GlowRegion position={[ 0.45,  0.30,  0.20]} radius={0.20} phase={0.0} speed={0.85}/>
-      <GlowRegion position={[-0.40,  0.10,  0.30]} radius={0.17} phase={1.5} speed={0.95} color="#E89C5C"/>
-      <GlowRegion position={[ 0.10,  0.40, -0.20]} radius={0.16} phase={2.9} speed={0.80}/>
-      <GlowRegion position={[-0.20, -0.10,  0.40]} radius={0.15} phase={4.2} speed={1.05} color="#D88B47"/>
-    </>
-  );
+// ── Build per-ring polyline data once from the land TopoJSON ─────────────
+function useContinentRings(r) {
+  return useMemo(() => {
+    const land = feature(landTopo, landTopo.objects.land);
+    const rings = [];
+    const polygons = land.geometry?.coordinates
+      ?? land.features?.flatMap((f) => (
+        f.geometry.type === 'MultiPolygon'
+          ? f.geometry.coordinates
+          : [f.geometry.coordinates]
+      )) ?? [];
+    for (const poly of polygons) {
+      for (const ring of poly) {
+        // Close the ring so it draws as a complete coastline.
+        const pts = ring.map(([lng, lat]) => latLngToVec3(lat, lng, r));
+        if (pts.length > 1) rings.push(pts);
+      }
+    }
+    return rings;
+  }, [r]);
 }
 
-// ── Error boundary: drop to FallbackBrain if /brain.glb is missing ────────
-class BrainBoundary extends React.Component {
-  constructor(p) { super(p); this.state = { errored: false }; }
-  static getDerivedStateFromError() { return { errored: true }; }
-  componentDidCatch() {}
-  render() {
-    if (this.state.errored) return this.props.fallback;
-    return this.props.children;
-  }
+// ── Spinning, tilted continent globe ─────────────────────────────────────
+function EarthGlobe() {
+  const rings = useContinentRings(1.002);
+  const spin = useRef();
+  useFrame((_, dt) => {
+    if (spin.current) spin.current.rotation.y += dt * 0.15;
+  });
+
+  return (
+    <group rotation={[0, 0, AXIAL_TILT_RAD]} position={[0, 1.5, 0]}>
+      <group ref={spin}>
+        {/* Almost-transparent latitude/longitude wireframe — the globe itself */}
+        <mesh>
+          <sphereGeometry args={[1, 32, 22]} />
+          <meshBasicMaterial
+            color={INK2}
+            wireframe
+            transparent
+            opacity={0.14}
+            depthWrite={false}
+          />
+        </mesh>
+
+        {/* Continent outlines drawn as 3D polylines */}
+        {rings.map((points, i) => (
+          <Line
+            key={i}
+            points={points}
+            color={INK}
+            lineWidth={1.2}
+            transparent
+            opacity={0.95}
+            toneMapped={false}
+            depthWrite={false}
+          />
+        ))}
+
+        {/* Endpoint markers */}
+        <CityDot lat={CITIES.boston.lat}  lng={CITIES.boston.lng}/>
+        <CityDot lat={CITIES.jakarta.lat} lng={CITIES.jakarta.lng}/>
+
+        {/* Animated arc — Boston → Jakarta */}
+        <AnimatedArc from={CITIES.boston} to={CITIES.jakarta} phaseMs={0}/>
+      </group>
+    </group>
+  );
 }
 
 // ── HTML overlay ──────────────────────────────────────────────────────────
@@ -184,30 +192,23 @@ function CornerBrackets() {
   );
 }
 
-// ── Animated ECG trace standing in for the progress bar ──────────────────
-// Generates a string of `beats` P-QRS-T cycles across `w` units in `h` units
-// of height, then reveals the whole line left-to-right over the duration.
+// ── ECG heartbeat trace standing in for the progress bar ──────────────────
 function makeEcgPath(beats, w, h) {
   const cyc = w / beats;
   const mid = h / 2;
   let d = `M 0 ${mid}`;
   for (let i = 0; i < beats; i++) {
     const x = i * cyc;
-    // P wave
     d += ` L ${x + 0.10 * cyc} ${mid}`;
     d += ` L ${x + 0.13 * cyc} ${mid - 2}`;
     d += ` L ${x + 0.16 * cyc} ${mid}`;
-    // Flat to Q
     d += ` L ${x + 0.28 * cyc} ${mid}`;
-    // Q · R · S spike
     d += ` L ${x + 0.30 * cyc} ${mid + 1.5}`;
     d += ` L ${x + 0.32 * cyc} ${mid - 12}`;
     d += ` L ${x + 0.34 * cyc} ${mid + 4}`;
     d += ` L ${x + 0.40 * cyc} ${mid}`;
-    // T wave
     d += ` L ${x + 0.55 * cyc} ${mid - 3}`;
     d += ` L ${x + 0.62 * cyc} ${mid}`;
-    // Flat to end of cycle
     d += ` L ${x + cyc} ${mid}`;
   }
   return d;
@@ -228,7 +229,6 @@ function HeartbeatLine({ durationMs }) {
         height={H}
         style={{ display: 'block', overflow: 'visible' }}
       >
-        {/* faint baseline so the line has a visual track */}
         <line x1="0" y1={H / 2} x2={W} y2={H / 2}
           stroke="rgba(17,45,78,0.10)" strokeWidth="1"/>
         <path
@@ -255,10 +255,8 @@ function HeartbeatLine({ durationMs }) {
 const DURATION_MS = 2500;
 
 export default function AnalyzingScreen({ onComplete }) {
-  const [phase, setPhase] = useState(0); // 0 = analyzing, 1 = finalizing
+  const [phase, setPhase] = useState(0);
 
-  // `?hold=1` pins the screen open so you can inspect it without it
-  // auto-advancing. Dev-only convenience.
   const hold = typeof window !== 'undefined'
     && new URLSearchParams(window.location.search).get('hold') === '1';
 
@@ -276,23 +274,16 @@ export default function AnalyzingScreen({ onComplete }) {
       fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif',
     }}>
       <Canvas
-        camera={{ position: [0, 0.30, 7.6], fov: 28 }}
+        camera={{ position: [0, 0.10, 17], fov: 26 }}
         style={{ position: 'absolute', inset: 0 }}
         dpr={[1, 2]}
         gl={{ antialias: true, alpha: true }}
-        onCreated={({ camera }) => camera.lookAt(0, 0, 0)}
       >
-        <ambientLight intensity={0.7}/>
-        <directionalLight position={[3, 4, 5]}  intensity={1.3} color="#FFF8EE"/>
-        <directionalLight position={[-4, -2, 2]} intensity={0.55} color="#DBE2EF"/>
-        <BrainBoundary fallback={<FallbackBrain/>}>
-          <Suspense fallback={<FallbackBrain/>}>
-            <BrainModel/>
-          </Suspense>
-        </BrainBoundary>
-        <GlowRegions/>
+        <ambientLight intensity={1.0}/>
+        <EarthGlobe/>
         <EffectComposer>
-          <Bloom intensity={0.35} luminanceThreshold={0.75} luminanceSmoothing={0.25} mipmapBlur/>
+          {/* Soft halo around the bright outlines */}
+          <Bloom intensity={0.55} luminanceThreshold={0.15} luminanceSmoothing={0.4} mipmapBlur/>
         </EffectComposer>
       </Canvas>
 
@@ -308,7 +299,7 @@ export default function AnalyzingScreen({ onComplete }) {
       </div>
 
       <div style={{
-        position: 'absolute', left: 0, right: 0, bottom: 130,
+        position: 'absolute', left: 0, right: 0, bottom: 220,
         textAlign: 'center',
       }}>
         <div style={{
@@ -332,6 +323,3 @@ export default function AnalyzingScreen({ onComplete }) {
     </div>
   );
 }
-
-// Preload only if the file is reachable — silently skip in dev when missing.
-try { useGLTF.preload('/brain.glb'); } catch (_) {}
