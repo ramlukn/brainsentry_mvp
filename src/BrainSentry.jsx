@@ -145,14 +145,20 @@ function StatusPill({ size = 'md' }) {
   );
 }
 
-// ─── Smooth Bezier sparkline ───────────────────────────────────────────────
-function Sparkline({ points, color = T.ink2, width = 100, height = 36 }) {
+// ─── Small deviation sparkline (with baseline + soft shading) ─────────────
+// `points` are signed fractions just like the dashboard chart.
+let bsMiniGradSeq = 0;
+function Sparkline({ points, color = T.ink2, width = 140, height = 40 }) {
+  const gradId = useMemo(() => `bsMiniGrad-${++bsMiniGradSeq}`, []);
   if (!points || points.length < 2) return null;
-  const min = Math.min(...points) - 0.02;
-  const max = Math.max(...points) + 0.02;
-  const range = Math.max(0.001, max - min);
+  const padT = 4, padB = 4;
+  const innerH = height - padT - padB;
+  const maxAbs = Math.max(0.04, ...points.map((p) => Math.abs(p)));
+  const yMax = maxAbs * 1.3;
+  const yMin = -yMax;
+  const range = yMax - yMin;
   const stepX = width / (points.length - 1);
-  const toY = (v) => height - ((v - min) / range) * (height - 4) - 2;
+  const toY = (v) => padT + innerH - ((v - yMin) / range) * innerH;
   const segs = points.map((p, i) => [i * stepX, toY(p)]);
   let d = `M ${segs[0][0]} ${segs[0][1]}`;
   for (let i = 1; i < segs.length; i++) {
@@ -161,9 +167,28 @@ function Sparkline({ points, color = T.ink2, width = 100, height = 36 }) {
     const mx = (x1 + x2) / 2;
     d += ` Q ${mx} ${y1}, ${mx} ${(y1 + y2) / 2} T ${x2} ${y2}`;
   }
+  const baselineY = toY(0);
+  // Closed area from line back to baseline; works regardless of sign.
+  const area =
+    `${d} L ${segs[segs.length - 1][0]} ${baselineY} ` +
+    `L ${segs[0][0]} ${baselineY} Z`;
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
-      <path d={d} fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stopColor={color} stopOpacity="0.22"/>
+          <stop offset="100%" stopColor={color} stopOpacity="0"/>
+        </linearGradient>
+      </defs>
+      {/* Baseline reference */}
+      <line x1="0" y1={baselineY} x2={width} y2={baselineY}
+        stroke={T.hairlineStr} strokeWidth="1"/>
+      <text x="2" y={baselineY - 3}
+        fontSize="8" fill={T.ink3} fontFamily={FONT} fontWeight="600">0</text>
+      {/* Area + line */}
+      <path d={area} fill={`url(#${gradId})`}/>
+      <path d={d} fill="none" stroke={color} strokeWidth="1.8"
+        strokeLinecap="round" strokeLinejoin="round"/>
     </svg>
   );
 }
@@ -420,8 +445,9 @@ function HomeScreen({ onRunCheck, onOpenDashboard }) {
     h = h % 12 || 12;
     return `${h}:${m} ${ampm}`;
   });
-  const facePts = [0.88, 0.93, 0.90, 0.95, 0.91, 0.94, 0.92, 0.96, 0.94];
-  const voicePts = [0.85, 0.91, 0.88, 0.92, 0.89, 0.93, 0.90, 0.92, 0.91];
+  // Signed deviation from baseline (fractions).
+  const facePts  = [-0.02,  0.01, -0.01,  0.02, -0.01,  0.01,  0.00,  0.02,  0.00];
+  const voicePts = [-0.03,  0.00, -0.01,  0.02, -0.02,  0.01,  0.00,  0.01,  0.00];
 
   return (
     <div style={{ height: '100%', overflow: 'hidden' }}>
@@ -556,7 +582,44 @@ function SignalCard({ icon, title, points, time, onClick }) {
   );
 }
 
-// ─── DASHBOARD SCREEN ─────────────────────────────────────────────────────
+// Trend data per time range — each entry shapes the chart for that tab.
+const TREND_HEADERS = { day: 'Last 24 hours', week: 'Last 7 days', month: 'Last 30 days' };
+const FACE_TREND = {
+  day:   { points: [-0.01, 0.00, 0.01, -0.01, 0.00, 0.02, -0.01, 0.00],
+           labels: ['9a','12p','3p','6p','9p','12a','3a','6a'] },
+  week:  { points: [-0.02, 0.01, -0.01, 0.02, 0.00, 0.01, 0.00],
+           labels: ['M','T','W','T','F','S','S'] },
+  month: { points: [-0.03, -0.01, 0.01, 0.00, 0.02],
+           labels: ['W1','W2','W3','W4','W5'] },
+};
+const VOICE_TREND = {
+  day:   { points: [-0.02, 0.00, 0.01, -0.02, 0.01, 0.00, -0.01, 0.00],
+           labels: ['9a','12p','3p','6p','9p','12a','3a','6a'] },
+  week:  { points: [-0.03, 0.01, -0.01, 0.02, -0.02, 0.00, 0.00],
+           labels: ['M','T','W','T','F','S','S'] },
+  month: { points: [-0.04, 0.00, -0.02, 0.01, 0.00],
+           labels: ['W1','W2','W3','W4','W5'] },
+};
+// Recent checks shown under the trend cards — content varies per range so
+// the Day / Week / Month tabs change more than just the charts.
+const RECENT_CHECKS = {
+  day: [
+    { kind: 'Active check',    time: '9:14 AM', note: 'Face + voice',     active: true },
+    { kind: 'Passive reading', time: '8:42 AM', note: 'Background scan' },
+    { kind: 'Passive reading', time: '7:30 AM', note: 'Background scan' },
+  ],
+  week: [
+    { kind: 'Active check',    time: 'Today 9:14 AM', note: 'Face + voice', active: true },
+    { kind: 'Active check',    time: 'Tue 8:50 AM',   note: 'Face + voice', active: true },
+    { kind: 'Passive reading', time: 'Mon',            note: 'Background scan' },
+  ],
+  month: [
+    { kind: 'Active check',    time: 'Today',         note: 'Face + voice', active: true },
+    { kind: 'Active check',    time: 'Last week',     note: 'Face + voice', active: true },
+    { kind: 'Active check',    time: '2 weeks ago',   note: 'Face + voice', active: true },
+  ],
+};
+
 function DashboardScreen({ onRunCheck, onBack }) {
   const [range, setRange] = useState('week');
   return (
@@ -572,17 +635,9 @@ function DashboardScreen({ onRunCheck, onBack }) {
             textTransform: 'uppercase', letterSpacing: 1.4, marginBottom: 4,
           }}>Trends</div>
           <div style={{ fontSize: 24, fontWeight: 600, color: T.ink, letterSpacing: -0.4, lineHeight: 1.1 }}>
-            Last 7 days
+            {TREND_HEADERS[range]}
           </div>
         </div>
-        <button onClick={onBack} style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6,
-          padding: '8px 14px', borderRadius: 999,
-          background: T.surface, border: `1px solid ${T.hairline}`,
-          fontFamily: FONT, fontSize: 13, fontWeight: 600, color: T.ink, cursor: 'pointer',
-        }}>
-          <Icon name="share" size={14} color={T.ink2}/> Share
-        </button>
       </div>
 
       {/* Status banner */}
@@ -631,8 +686,8 @@ function DashboardScreen({ onRunCheck, onBack }) {
       <div style={{ padding: '12px 22px 0' }}>
         <TrendCard
           icon="face" title="Face symmetry"
-          points={[-0.02, 0.01, -0.01, 0.02, 0.00, 0.01, 0.00]}
-          labels={['M', 'T', 'W', 'T', 'F', 'S', 'S']}
+          points={FACE_TREND[range].points}
+          labels={FACE_TREND[range].labels}
         />
       </div>
 
@@ -640,12 +695,12 @@ function DashboardScreen({ onRunCheck, onBack }) {
       <div style={{ padding: '10px 22px 0' }}>
         <TrendCard
           icon="mic" title="Voice clarity"
-          points={[-0.03, 0.01, -0.01, 0.02, -0.02, 0.00, 0.00]}
-          labels={['M', 'T', 'W', 'T', 'F', 'S', 'S']}
+          points={VOICE_TREND[range].points}
+          labels={VOICE_TREND[range].labels}
         />
       </div>
 
-      {/* Recent checks */}
+      {/* Recent checks — list adapts to the active range */}
       <div style={{ padding: '12px 22px 0' }}>
         <div style={{
           fontSize: 11, fontWeight: 600, color: T.ink3,
@@ -655,9 +710,12 @@ function DashboardScreen({ onRunCheck, onBack }) {
           background: T.surface, borderRadius: 18, border: `1px solid ${T.hairline}`,
           overflow: 'hidden',
         }}>
-          <CheckRow kind="Active check" time="9:14 AM" note="Face + voice" active/>
-          <Divider/>
-          <CheckRow kind="Passive reading" time="8:42 AM" note="Background scan"/>
+          {RECENT_CHECKS[range].map((c, i, arr) => (
+            <React.Fragment key={i}>
+              <CheckRow kind={c.kind} time={c.time} note={c.note} active={c.active}/>
+              {i < arr.length - 1 && <Divider/>}
+            </React.Fragment>
+          ))}
         </div>
       </div>
 
@@ -1207,7 +1265,10 @@ function VoiceTestScreen({ onComplete, onClose }) {
 }
 
 // ─── RESULTS SCREEN ───────────────────────────────────────────────────────
-function ResultsScreen({ onViewTrends, onDone, onClose }) {
+function ResultsScreen({ onViewTrends, onDone, onRetakeFace, onRetakeVoice, onClose }) {
+  // Generate a fresh 0–5% deviation per mount for face and voice.
+  const faceDev  = useMemo(() => Math.random() * 5, []);
+  const voiceDev = useMemo(() => Math.random() * 5, []);
   return (
     <div style={{ paddingBottom: 32 }}>
       <FlowHeader onClose={onClose} label="Active stroke check"/>
@@ -1232,8 +1293,8 @@ function ResultsScreen({ onViewTrends, onDone, onClose }) {
         }}>Face symmetry and voice clarity match your baseline.</p>
 
         <div style={{ display: 'grid', gap: 10, marginBottom: 14 }}>
-          <ResultRow label="Face — % deviated from baseline"/>
-          <ResultRow label="Voice — % deviated from baseline"/>
+          <ResultRow label="Face — deviation from baseline"  value={faceDev}/>
+          <ResultRow label="Voice — deviation from baseline" value={voiceDev}/>
         </div>
 
         <div style={{
@@ -1246,6 +1307,26 @@ function ResultsScreen({ onViewTrends, onDone, onClose }) {
         </div>
 
         <div style={{ display: 'grid', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={onRetakeFace} style={{
+              flex: 1, padding: '12px 14px', borderRadius: 999,
+              background: 'transparent', color: T.ink2,
+              border: `1px solid ${T.hairlineStr}`, cursor: 'pointer',
+              fontFamily: FONT, fontSize: 13, fontWeight: 600, letterSpacing: -0.1,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            }}>
+              <Icon name="face" size={14} color={T.ink2}/> Re-take face
+            </button>
+            <button onClick={onRetakeVoice} style={{
+              flex: 1, padding: '12px 14px', borderRadius: 999,
+              background: 'transparent', color: T.ink2,
+              border: `1px solid ${T.hairlineStr}`, cursor: 'pointer',
+              fontFamily: FONT, fontSize: 13, fontWeight: 600, letterSpacing: -0.1,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            }}>
+              <Icon name="mic" size={14} color={T.ink2}/> Re-take voice
+            </button>
+          </div>
           <button onClick={onViewTrends} style={{
             width: '100%', padding: '14px 22px', borderRadius: 999,
             background: T.surface, color: T.ink,
@@ -1264,7 +1345,11 @@ function ResultsScreen({ onViewTrends, onDone, onClose }) {
   );
 }
 
-function ResultRow({ label }) {
+// `value` is a deviation in percentage points (0–10 typical scale).
+function ResultRow({ label, value = 0 }) {
+  const display = value.toFixed(1);
+  // Cap the bar visualisation at 10% so the bar reads as "well within range".
+  const barPct = Math.min(100, (value / 10) * 100);
   return (
     <div style={{
       background: T.surface, borderRadius: 18, padding: '14px 16px',
@@ -1278,17 +1363,13 @@ function ResultRow({ label }) {
         <span style={{
           fontSize: 24, fontWeight: 700, color: T.ink,
           fontVariantNumeric: 'tabular-nums', letterSpacing: -0.5, lineHeight: 1,
-        }}>0%</span>
+        }}>{display}%</span>
       </div>
       <div style={{ height: 4, background: T.appBg, borderRadius: 2, overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: '2%', background: T.ink2, borderRadius: 2 }}/>
-      </div>
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', marginTop: 6,
-        fontSize: 11, color: T.ink3,
-      }}>
-        <span>Baseline</span>
-        <span>50% deviation</span>
+        <div style={{
+          height: '100%', width: `${barPct}%`, background: T.ink2, borderRadius: 2,
+          transition: 'width 400ms ease-out',
+        }}/>
       </div>
     </div>
   );
@@ -1335,7 +1416,13 @@ export default function BrainSentry() {
       );
       break;
     case 'results':
-      content = <ResultsScreen onViewTrends={goDashboard} onDone={goHome} onClose={goHome}/>;
+      content = <ResultsScreen
+        onViewTrends={goDashboard}
+        onDone={goHome}
+        onRetakeFace={goFaceTest}
+        onRetakeVoice={goVoiceTest}
+        onClose={goHome}
+      />;
       break;
     default:
       content = null;
