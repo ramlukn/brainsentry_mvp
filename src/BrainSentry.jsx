@@ -421,7 +421,9 @@ function FlowHeader({ onClose, label }) {
 function RunCheckFab({ onClick }) {
   return (
     <button onClick={onClick} style={{
-      position: 'absolute', bottom: 28, left: '50%', transform: 'translateX(-50%)',
+      position: 'absolute',
+      bottom: 'calc(40px + env(safe-area-inset-bottom, 0px))',
+      left: '50%', transform: 'translateX(-50%)',
       height: 54, padding: '0 28px', borderRadius: 999, border: 'none',
       background: T.ink, color: '#fff',
       fontFamily: FONT, fontSize: 15, fontWeight: 600, letterSpacing: -0.2,
@@ -825,6 +827,7 @@ function FaceTestScreen({ onComplete, onClose }) {
   const [started, setStarted] = useState(false);
   const [stepIdx, setStepIdx] = useState(0);
   const [camError, setCamError] = useState(false);
+  const [facingMode, setFacingMode] = useState('environment');
   const videoRef = useRef(null);
 
   // Camera
@@ -833,7 +836,7 @@ function FaceTestScreen({ onComplete, onClose }) {
     let cancelled = false;
     async function start() {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode }, audio: false });
         if (cancelled) {
           stream.getTracks().forEach(t => t.stop());
           return;
@@ -841,6 +844,7 @@ function FaceTestScreen({ onComplete, onClose }) {
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
+        setCamError(false);
       } catch (e) {
         if (!cancelled) setCamError(true);
       }
@@ -851,7 +855,22 @@ function FaceTestScreen({ onComplete, onClose }) {
       if (stream) stream.getTracks().forEach(t => t.stop());
       if (videoRef.current) videoRef.current.srcObject = null;
     };
-  }, []);
+  }, [facingMode]);
+
+  const flipCamera = () => setFacingMode(m => (m === 'user' ? 'environment' : 'user'));
+
+  // Space to start capture
+  useEffect(() => {
+    if (started) return;
+    const onKey = (e) => {
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        setStarted(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [started]);
 
   // Step sequence
   useEffect(() => {
@@ -892,6 +911,7 @@ function FaceTestScreen({ onComplete, onClose }) {
             <video ref={videoRef} autoPlay playsInline muted style={{
               position: 'absolute', inset: 0, width: '100%', height: '100%',
               objectFit: 'cover',
+              transform: facingMode === 'user' ? 'scaleX(-1)' : 'none',
             }}/>
           )}
 
@@ -943,9 +963,27 @@ function FaceTestScreen({ onComplete, onClose }) {
             </g>
           </svg>
 
+          {/* Flip camera button */}
+          <button onClick={flipCamera} aria-label="Flip camera" style={{
+            position: 'absolute', top: 12, right: 12,
+            width: 36, height: 36, borderRadius: '50%', border: 'none',
+            background: 'rgba(0,0,0,0.55)', color: '#fff',
+            backdropFilter: 'blur(8px)', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 5,
+          }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2"
+              strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 7h13l-2-2"/>
+              <path d="M21 17H8l2 2"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+
           {/* Top badges */}
           <div style={{
-            position: 'absolute', top: 12, left: 12, right: 12,
+            position: 'absolute', top: 12, left: 12, right: 60,
             display: 'flex', justifyContent: 'space-between', gap: 8,
           }}>
             <DarkGlassPill>☀ Lighting · Good</DarkGlassPill>
