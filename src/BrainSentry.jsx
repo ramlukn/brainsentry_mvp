@@ -37,6 +37,24 @@ const GLOBAL_CSS = `
 @keyframes bsBtnPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
 `;
 
+// ─── Media query hook ──────────────────────────────────────────────────────
+// Screens size themselves down on shorter viewports (e.g. iPhone SE) so the
+// layout reads comfortably instead of cramming the full-height design.
+function useMediaQuery(query) {
+  const [match, setMatch] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia(query).matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const onChange = () => setMatch(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [query]);
+  return match;
+}
+const COMPACT_MQ = '(max-height: 740px)';
+
 // ─── Inline SVG icon set ───────────────────────────────────────────────────
 function Icon({ name, size = 20, color = 'currentColor', strokeWidth = 1.6 }) {
   const s = { width: size, height: size, display: 'inline-block', flexShrink: 0 };
@@ -425,7 +443,7 @@ function RunCheckFab({ onClick }) {
   return (
     <button onClick={onClick} style={{
       position: 'fixed',
-      bottom: 'calc(18px + env(safe-area-inset-bottom, 0px))',
+      bottom: 'max(14px, calc(4px + env(safe-area-inset-bottom, 0px)))',
       left: '50%', transform: 'translateX(-50%)',
       height: 54, padding: '0 28px', borderRadius: 999, border: 'none',
       background: T.ink, color: '#fff',
@@ -442,6 +460,7 @@ function RunCheckFab({ onClick }) {
 
 // ─── HOME SCREEN ──────────────────────────────────────────────────────────
 function HomeScreen({ onRunCheck, onOpenDashboard }) {
+  const compact = useMediaQuery(COMPACT_MQ);
   const [updatedAt] = useState(() => {
     const d = new Date();
     let h = d.getHours();
@@ -455,7 +474,10 @@ function HomeScreen({ onRunCheck, onOpenDashboard }) {
   const voicePts = [-0.03,  0.00, -0.01,  0.02, -0.02,  0.01,  0.00,  0.01,  0.00];
 
   return (
-    <div style={{ minHeight: '100%', paddingBottom: 'calc(130px + env(safe-area-inset-bottom, 0px))' }}>
+    <div style={{
+      minHeight: '100%',
+      paddingBottom: `calc(${compact ? 104 : 130}px + env(safe-area-inset-bottom, 0px))`,
+    }}>
       {/* Header */}
       <div style={{ padding: '8px 22px', display: 'flex', alignItems: 'center', gap: 12 }}>
         <Avatar name="Kee P" />
@@ -479,7 +501,10 @@ function HomeScreen({ onRunCheck, onOpenDashboard }) {
       </div>
 
       {/* Status section */}
-      <div style={{ padding: '24px 22px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <div style={{
+        padding: compact ? '10px 22px 4px' : '24px 22px 8px',
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+      }}>
         <span style={{
           display: 'inline-flex', alignItems: 'center', gap: 6,
           padding: '5px 12px', borderRadius: 999,
@@ -491,12 +516,12 @@ function HomeScreen({ onRunCheck, onOpenDashboard }) {
           Updated {updatedAt}
         </span>
 
-        <div style={{ margin: '20px 0 16px' }}>
-          <StatusOrb size={180}/>
+        <div style={{ margin: compact ? '12px 0 10px' : '20px 0 16px' }}>
+          <StatusOrb size={compact ? 136 : 180}/>
         </div>
 
         <h1 style={{
-          margin: '0 0 6px', fontSize: 32, fontWeight: 400, color: T.ink,
+          margin: '0 0 6px', fontSize: compact ? 26 : 32, fontWeight: 400, color: T.ink,
           letterSpacing: -0.6, lineHeight: 1.15, textAlign: 'center', fontFamily: FONT,
         }}>
           You look <span style={{ color: T.ink2, fontWeight: 600 }}>steady</span> today.
@@ -507,7 +532,7 @@ function HomeScreen({ onRunCheck, onOpenDashboard }) {
       </div>
 
       {/* Signal cards */}
-      <div style={{ padding: '22px 22px 0' }}>
+      <div style={{ padding: compact ? '12px 22px 0' : '22px 22px 0' }}>
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
           padding: '0 4px 10px',
@@ -519,13 +544,13 @@ function HomeScreen({ onRunCheck, onOpenDashboard }) {
           <span style={{ fontSize: 11, color: T.ink3, letterSpacing: 0.4 }}>vs. baseline</span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <SignalCard icon="face" title="Face" points={facePts} time="just now" onClick={onOpenDashboard}/>
-          <SignalCard icon="mic"  title="Voice" points={voicePts} time="3 min ago" onClick={onOpenDashboard}/>
+          <SignalCard icon="face" title="Face" points={facePts} time="just now" onClick={onOpenDashboard} compact={compact}/>
+          <SignalCard icon="mic"  title="Voice" points={voicePts} time="3 min ago" onClick={onOpenDashboard} compact={compact}/>
         </div>
       </div>
 
       {/* Passive check row — clicking "run one now" starts an active check */}
-      <div style={{ padding: '14px 22px 0' }}>
+      <div style={{ padding: compact ? '10px 22px 0' : '14px 22px 0' }}>
         <button onClick={onRunCheck} style={{
           width: '100%', padding: 14, borderRadius: 18, background: T.surface,
           border: `1px solid ${T.hairline}`, cursor: 'pointer',
@@ -555,13 +580,13 @@ function HomeScreen({ onRunCheck, onOpenDashboard }) {
   );
 }
 
-function SignalCard({ icon, title, points, time, onClick }) {
+function SignalCard({ icon, title, points, time, onClick, compact }) {
   return (
     <button onClick={onClick} style={{
-      background: T.surface, borderRadius: 22, padding: 16,
+      background: T.surface, borderRadius: 22, padding: compact ? 13 : 16,
       border: `1px solid ${T.hairline}`, textAlign: 'left',
       cursor: 'pointer', fontFamily: FONT, color: T.ink,
-      display: 'flex', flexDirection: 'column', gap: 10,
+      display: 'flex', flexDirection: 'column', gap: compact ? 8 : 10,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <div style={{
@@ -574,13 +599,13 @@ function SignalCard({ icon, title, points, time, onClick }) {
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
         <span style={{
-          fontSize: 32, fontWeight: 600, color: T.ink, lineHeight: 1,
+          fontSize: compact ? 26 : 32, fontWeight: 600, color: T.ink, lineHeight: 1,
           fontVariantNumeric: 'tabular-nums',
         }}>0</span>
         <span style={{ fontSize: 11, color: T.ink3 }}>% from baseline</span>
       </div>
-      <div style={{ height: 36 }}>
-        <Sparkline points={points} color={T.ink2} width={140} height={36}/>
+      <div style={{ height: compact ? 30 : 36 }}>
+        <Sparkline points={points} color={T.ink2} width={140} height={compact ? 30 : 36}/>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: T.ok }}>±0</span>
@@ -629,9 +654,13 @@ const RECENT_CHECKS = {
 };
 
 function DashboardScreen({ onRunCheck, onBack }) {
+  const compact = useMediaQuery(COMPACT_MQ);
   const [range, setRange] = useState('week');
   return (
-    <div style={{ minHeight: '100%', paddingBottom: 'calc(130px + env(safe-area-inset-bottom, 0px))' }}>
+    <div style={{
+      minHeight: '100%',
+      paddingBottom: `calc(${compact ? 104 : 130}px + env(safe-area-inset-bottom, 0px))`,
+    }}>
       {/* Header */}
       <div style={{
         padding: '8px 22px 14px',
@@ -642,7 +671,10 @@ function DashboardScreen({ onRunCheck, onBack }) {
             fontSize: 11, fontWeight: 600, color: T.ink3,
             textTransform: 'uppercase', letterSpacing: 1.4, marginBottom: 4,
           }}>Trends</div>
-          <div style={{ fontSize: 24, fontWeight: 600, color: T.ink, letterSpacing: -0.4, lineHeight: 1.1 }}>
+          <div style={{
+            fontSize: compact ? 20 : 24, fontWeight: 600, color: T.ink,
+            letterSpacing: -0.4, lineHeight: 1.1,
+          }}>
             {TREND_HEADERS[range]}
           </div>
         </div>
@@ -698,20 +730,22 @@ function DashboardScreen({ onRunCheck, onBack }) {
       </div>
 
       {/* Face trend card — signed deviation from personal baseline */}
-      <div style={{ padding: '12px 22px 0' }}>
+      <div style={{ padding: compact ? '10px 22px 0' : '12px 22px 0' }}>
         <TrendCard
           icon="face" title="Face symmetry"
           points={FACE_TREND[range].points}
           labels={FACE_TREND[range].labels}
+          compact={compact}
         />
       </div>
 
       {/* Voice trend card */}
-      <div style={{ padding: '10px 22px 0' }}>
+      <div style={{ padding: compact ? '8px 22px 0' : '10px 22px 0' }}>
         <TrendCard
           icon="mic" title="Voice clarity"
           points={VOICE_TREND[range].points}
           labels={VOICE_TREND[range].labels}
+          compact={compact}
         />
       </div>
 
@@ -739,7 +773,7 @@ function DashboardScreen({ onRunCheck, onBack }) {
   );
 }
 
-function TrendCard({ icon, title, points, labels }) {
+function TrendCard({ icon, title, points, labels, compact }) {
   const latest = points[points.length - 1] ?? 0;
   const pct = Math.abs(latest * 100);
   const sign = latest > 0.0005 ? '+' : latest < -0.0005 ? '−' : '±';
@@ -765,12 +799,12 @@ function TrendCard({ icon, title, points, labels }) {
           textTransform: 'uppercase', letterSpacing: 0.4,
         }}>vs baseline</span>
       </div>
-      <ChartContainer points={points} labels={labels}/>
+      <ChartContainer points={points} labels={labels} height={compact ? 94 : 110}/>
     </div>
   );
 }
 
-function ChartContainer({ points, labels }) {
+function ChartContainer({ points, labels, height = 110 }) {
   const ref = useRef(null);
   const [w, setW] = useState(320);
   useEffect(() => {
@@ -782,8 +816,8 @@ function ChartContainer({ points, labels }) {
     return () => ro.disconnect();
   }, []);
   return (
-    <div ref={ref} style={{ width: '100%', height: 110 }}>
-      <LineChart points={points} labels={labels} width={w} height={110}/>
+    <div ref={ref} style={{ width: '100%', height }}>
+      <LineChart points={points} labels={labels} width={w} height={height}/>
     </div>
   );
 }
@@ -827,6 +861,7 @@ const FACE_STEPS = [
 ];
 
 function FaceTestScreen({ onComplete, onClose }) {
+  const compact = useMediaQuery(COMPACT_MQ);
   const [started, setStarted] = useState(false);
   const [stepIdx, setStepIdx] = useState(0);
   const [camError, setCamError] = useState(false);
@@ -947,7 +982,8 @@ function FaceTestScreen({ onComplete, onClose }) {
       <div style={{ padding: '0 22px' }}>
         {/* Camera oval */}
         <div style={{
-          position: 'relative', width: '100%', aspectRatio: '4 / 5',
+          position: 'relative', width: '100%',
+          aspectRatio: compact ? '1 / 1.08' : '4 / 5',
           borderRadius: 22, overflow: 'hidden', background: '#0E2A2A',
         }}>
           {/* Video stream */}
@@ -1392,6 +1428,7 @@ function VoiceTestScreen({ onComplete, onClose }) {
 
 // ─── RESULTS SCREEN ───────────────────────────────────────────────────────
 function ResultsScreen({ onViewTrends, onDone, onRetakeFace, onRetakeVoice, onClose }) {
+  const compact = useMediaQuery(COMPACT_MQ);
   // Generate a fresh signed −5…+5% deviation per mount for face and voice.
   const faceDev  = useMemo(() => Math.random() * 10 - 5, []);
   const voiceDev = useMemo(() => Math.random() * 10 - 5, []);
@@ -1403,12 +1440,12 @@ function ResultsScreen({ onViewTrends, onDone, onRetakeFace, onRetakeVoice, onCl
       </div>
 
       <div style={{ padding: '0 22px' }}>
-        <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0 18px' }}>
-          <StatusOrb size={160}/>
+        <div style={{ display: 'flex', justifyContent: 'center', margin: compact ? '4px 0 12px' : '8px 0 18px' }}>
+          <StatusOrb size={compact ? 124 : 160}/>
         </div>
 
         <h2 style={{
-          margin: '0 0 8px', fontSize: 30, fontWeight: 600, color: T.ink,
+          margin: '0 0 8px', fontSize: compact ? 25 : 30, fontWeight: 600, color: T.ink,
           letterSpacing: -0.6, textAlign: 'center', lineHeight: 1.15, fontFamily: FONT,
         }}>
           No change <span style={{ color: T.ok }}>detected.</span>
