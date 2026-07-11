@@ -229,10 +229,11 @@ function LineChart({ points, labels, color = T.ink2, width = 300, height = 130 }
   const gradTop = `bsLcGradTop-${color.replace('#', '')}`;
   const gradBot = `bsLcGradBot-${color.replace('#', '')}`;
   // Two-direction fill: tint above baseline up, tint below baseline down.
-  const areaUp =
-    `M ${segs[0][0]} ${baselineY} ` +
-    segs.map(([x, y]) => `L ${x} ${y}`).join(' ') +
-    ` L ${segs[segs.length - 1][0]} ${baselineY} Z`;
+  // Reuse the curved line path `d` so the fill hugs the curve exactly,
+  // instead of straight segments between the data points.
+  const area =
+    `${d} L ${segs[segs.length - 1][0]} ${baselineY}` +
+    ` L ${segs[0][0]} ${baselineY} Z`;
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
       <defs>
@@ -275,10 +276,10 @@ function LineChart({ points, labels, color = T.ink2, width = 300, height = 130 }
 
       {/* Tinted area above/below baseline */}
       <g clipPath={`url(#bsClipTop-${color.replace('#', '')})`}>
-        <path d={areaUp} fill={`url(#${gradTop})`}/>
+        <path d={area} fill={`url(#${gradTop})`}/>
       </g>
       <g clipPath={`url(#bsClipBot-${color.replace('#', '')})`}>
-        <path d={areaUp} fill={`url(#${gradBot})`}/>
+        <path d={area} fill={`url(#${gradBot})`}/>
       </g>
 
       {/* Line + points */}
@@ -424,7 +425,7 @@ function RunCheckFab({ onClick }) {
   return (
     <button onClick={onClick} style={{
       position: 'fixed',
-      bottom: 'calc(40px + env(safe-area-inset-bottom, 0px))',
+      bottom: 'calc(18px + env(safe-area-inset-bottom, 0px))',
       left: '50%', transform: 'translateX(-50%)',
       height: 54, padding: '0 28px', borderRadius: 999, border: 'none',
       background: T.ink, color: '#fff',
@@ -714,12 +715,12 @@ function DashboardScreen({ onRunCheck, onBack }) {
         />
       </div>
 
-      {/* Recent checks — list adapts to the active range */}
+      {/* Relevant checks — list adapts to the active range */}
       <div style={{ padding: '12px 22px 0' }}>
         <div style={{
           fontSize: 11, fontWeight: 600, color: T.ink3,
           textTransform: 'uppercase', letterSpacing: 1.2, padding: '0 4px 8px',
-        }}>Recent checks</div>
+        }}>Relevant checks</div>
         <div style={{
           background: T.surface, borderRadius: 18, border: `1px solid ${T.hairline}`,
           overflow: 'hidden',
@@ -830,7 +831,13 @@ function FaceTestScreen({ onComplete, onClose }) {
   const [stepIdx, setStepIdx] = useState(0);
   const [camError, setCamError] = useState(false);
   const [facingMode, setFacingMode] = useState('environment');
+  // Bumping this re-runs the camera effect: used by the gesture-triggered
+  // "Enable camera" button (iOS won't prompt outside a user gesture) and by
+  // wake-from-sleep recovery.
+  const [camAttempt, setCamAttempt] = useState(0);
   const videoRef = useRef(null);
+
+  const retryCamera = () => { setCamError(false); setCamAttempt(a => a + 1); };
 
   // Camera
   useEffect(() => {
@@ -853,6 +860,11 @@ function FaceTestScreen({ onComplete, onClose }) {
           stream.getTracks().forEach(t => t.stop());
           return;
         }
+        // Screen lock or another app claiming the camera ends the track
+        // without any error — surface it so the user can re-enable.
+        stream.getTracks().forEach(t => {
+          t.onended = () => { if (!cancelled) setCamError(true); };
+        });
         const video = videoRef.current;
         if (video) {
           video.srcObject = stream;
@@ -866,12 +878,28 @@ function FaceTestScreen({ onComplete, onClose }) {
       }
     }
     start();
+
+    // Mobile browsers suspend or end camera tracks while the page is hidden
+    // (screen sleep, app switch). On return, restart the stream if it died,
+    // or nudge playback if it merely paused.
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || cancelled) return;
+      const track = stream && stream.getVideoTracks()[0];
+      if (!track || track.readyState === 'ended' || track.muted) {
+        setCamAttempt(a => a + 1);
+      } else if (videoRef.current) {
+        videoRef.current.play().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
     return () => {
       cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
       if (stream) stream.getTracks().forEach(t => t.stop());
       if (videoRef.current) videoRef.current.srcObject = null;
     };
-  }, [facingMode]);
+  }, [facingMode, camAttempt]);
 
   const flipCamera = () => setFacingMode(m => (m === 'user' ? 'environment' : 'user'));
 
@@ -941,11 +969,13 @@ function FaceTestScreen({ onComplete, onClose }) {
           {/* Face placeholder when no camera */}
           {camError && (
             <div style={{
-              position: 'absolute', inset: 0,
+              position: 'absolute', inset: 0, zIndex: 4,
               display: 'flex', flexDirection: 'column',
               alignItems: 'center', justifyContent: 'center',
+              // Keep the message and button clear of the bottom control panel.
+              paddingBottom: 96,
             }}>
-              <svg width="100%" height="70%" viewBox="0 0 320 400" style={{ opacity: 0.55 }}>
+              <svg width="100%" height="40%" viewBox="0 0 320 400" style={{ opacity: 0.55 }}>
                 <ellipse cx="160" cy="180" rx="80" ry="110" fill="none" stroke="#fff" strokeWidth="2"/>
                 <circle cx="135" cy="160" r="4" fill="#fff"/>
                 <circle cx="185" cy="160" r="4" fill="#fff"/>
@@ -955,9 +985,17 @@ function FaceTestScreen({ onComplete, onClose }) {
                 marginTop: 8, padding: '0 32px', textAlign: 'center',
                 fontSize: 12.5, color: 'rgba(255,255,255,0.85)', lineHeight: 1.4,
               }}>
-                Camera unavailable. Allow camera access for this site in your
-                browser settings, then reopen this check.
+                Camera is off. Tap below and allow camera access when prompted.
               </div>
+              <button onClick={retryCamera} style={{
+                marginTop: 14, height: 40, padding: '0 22px', borderRadius: 999,
+                border: '1px solid rgba(255,255,255,0.55)', cursor: 'pointer',
+                background: 'rgba(255,255,255,0.14)', color: '#fff',
+                fontFamily: FONT, fontSize: 13.5, fontWeight: 600, letterSpacing: -0.1,
+                backdropFilter: 'blur(6px)',
+              }}>
+                Enable camera
+              </button>
             </div>
           )}
 
@@ -1178,28 +1216,21 @@ function VoiceTestScreen({ onComplete, onClose }) {
           analyserRef.current.getByteFrequencyData(freq);
           analyserRef.current.getByteTimeDomainData(time);
 
-          // Build half the bars from low→high frequency buckets, then mirror
-          // them around the centre so loud (voice-band) energy radiates from
-          // the middle outward.
-          const HALF = Math.floor(WAVE_BARS / 2);
+          // Map bars left→right across the low→high voice band, shaped by a
+          // sine window so both ends taper off instead of mirroring around
+          // the centre.
           const usable = Math.floor(freq.length * 0.7);
-          const step = Math.max(1, Math.floor(usable / HALF));
-          const half = new Array(HALF);
-          for (let i = 0; i < HALF; i++) {
+          const step = Math.max(1, Math.floor(usable / WAVE_BARS));
+          const out = new Array(WAVE_BARS);
+          for (let i = 0; i < WAVE_BARS; i++) {
             let sum = 0, n = 0;
             for (let j = i * step; j < (i + 1) * step && j < usable; j++) {
               sum += freq[j]; n++;
             }
             const avg = n ? sum / n : 0;
-            // Soft taper outward — emphasises the centre while keeping edges live.
-            const envelope = 1 - 0.35 * (i / Math.max(1, HALF - 1));
-            half[i] = Math.min(1, ((avg / 255) * 1.9 * envelope) + 0.04);
-          }
-          const out = new Array(WAVE_BARS);
-          const centerIdx = (WAVE_BARS - 1) / 2;
-          for (let i = 0; i < WAVE_BARS; i++) {
-            const d = Math.min(HALF - 1, Math.floor(Math.abs(i - centerIdx)));
-            out[i] = half[d];
+            const taper = Math.sin((Math.PI * (i + 0.5)) / WAVE_BARS); // 0 → 1 → 0
+            const envelope = 0.2 + 0.8 * taper;
+            out[i] = Math.min(1, ((avg / 255) * 1.9 * envelope) + 0.04);
           }
 
           // RMS over time-domain (centred at 128) → 0..~0.5 in practice.
@@ -1220,9 +1251,19 @@ function VoiceTestScreen({ onComplete, onClose }) {
       }
     })();
 
+    // Browsers suspend the AudioContext while the page is hidden; resume it
+    // when the user comes back so the waveform doesn't freeze.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        ctxRef.current?.resume().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
     return () => {
       cancelled = true;
       mountedRef.current = false;
+      document.removeEventListener('visibilitychange', onVisible);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
@@ -1351,9 +1392,9 @@ function VoiceTestScreen({ onComplete, onClose }) {
 
 // ─── RESULTS SCREEN ───────────────────────────────────────────────────────
 function ResultsScreen({ onViewTrends, onDone, onRetakeFace, onRetakeVoice, onClose }) {
-  // Generate a fresh 0–5% deviation per mount for face and voice.
-  const faceDev  = useMemo(() => Math.random() * 5, []);
-  const voiceDev = useMemo(() => Math.random() * 5, []);
+  // Generate a fresh signed −5…+5% deviation per mount for face and voice.
+  const faceDev  = useMemo(() => Math.random() * 10 - 5, []);
+  const voiceDev = useMemo(() => Math.random() * 10 - 5, []);
   return (
     <div style={{ paddingBottom: 'calc(32px + env(safe-area-inset-bottom, 0px))' }}>
       <FlowHeader onClose={onClose} label="Active stroke check"/>
@@ -1430,11 +1471,16 @@ function ResultsScreen({ onViewTrends, onDone, onRetakeFace, onRetakeVoice, onCl
   );
 }
 
-// `value` is a deviation in percentage points (0–10 typical scale).
+// `value` is a signed deviation in percentage points (−5…+5 typical scale).
+// The sign shows the direction of the change; the bar grows from a centre
+// baseline — right for above baseline, left for below.
 function ResultRow({ label, value = 0 }) {
-  const display = value.toFixed(1);
-  // Cap the bar visualisation at 10% so the bar reads as "well within range".
-  const barPct = Math.min(100, (value / 10) * 100);
+  const up = value > 0.05;
+  const down = value < -0.05;
+  const sign = up ? '+' : down ? '−' : '±';
+  const display = `${sign}${Math.abs(value).toFixed(1)}%`;
+  // Half-width of the bar as a % of the track, capped at ±5%.
+  const half = Math.min(50, (Math.abs(value) / 5) * 50);
   return (
     <div style={{
       background: T.surface, borderRadius: 18, padding: '14px 16px',
@@ -1448,12 +1494,18 @@ function ResultRow({ label, value = 0 }) {
         <span style={{
           fontSize: 24, fontWeight: 700, color: T.ink,
           fontVariantNumeric: 'tabular-nums', letterSpacing: -0.5, lineHeight: 1,
-        }}>{display}%</span>
+        }}>{display}</span>
       </div>
-      <div style={{ height: 4, background: T.appBg, borderRadius: 2, overflow: 'hidden' }}>
+      <div style={{ position: 'relative', height: 4, background: T.appBg, borderRadius: 2 }}>
         <div style={{
-          height: '100%', width: `${barPct}%`, background: T.ink2, borderRadius: 2,
-          transition: 'width 400ms ease-out',
+          position: 'absolute', top: 0, bottom: 0, borderRadius: 2, background: T.ink2,
+          left: down ? `${50 - half}%` : '50%',
+          width: `${half}%`,
+          transition: 'width 400ms ease-out, left 400ms ease-out',
+        }}/>
+        <div style={{
+          position: 'absolute', top: -2, bottom: -2, left: '50%', width: 1.5,
+          background: T.hairlineStr, transform: 'translateX(-50%)',
         }}/>
       </div>
     </div>
