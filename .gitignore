@@ -4,3 +4,5 @@ dist
 .vite
 *.log
 .claude/worktrees/
+CLAUDE.local.md
+.playwright-mcp/

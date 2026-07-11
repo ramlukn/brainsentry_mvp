@@ -31,7 +31,9 @@ const GLOBAL_CSS = `
 @keyframes bsPulseB { 0%,100% { transform: scale(1); opacity: 0.22; } 50% { transform: scale(1.32); opacity: 0; } }
 @keyframes bsEcg { from { stroke-dashoffset: 240; } to { stroke-dashoffset: 0; } }
 @keyframes bsWave { 0%,100% { transform: scaleY(0.22); } 50% { transform: scaleY(1); } }
-@keyframes bsFade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* Opacity-only: animating transform here would turn the page wrapper into a
+   containing block for position:fixed children (the FAB) and un-pin them. */
+@keyframes bsFade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes bsBtnPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
 `;
 
@@ -421,7 +423,7 @@ function FlowHeader({ onClose, label }) {
 function RunCheckFab({ onClick }) {
   return (
     <button onClick={onClick} style={{
-      position: 'absolute',
+      position: 'fixed',
       bottom: 'calc(40px + env(safe-area-inset-bottom, 0px))',
       left: '50%', transform: 'translateX(-50%)',
       height: 54, padding: '0 28px', borderRadius: 999, border: 'none',
@@ -452,7 +454,7 @@ function HomeScreen({ onRunCheck, onOpenDashboard }) {
   const voicePts = [-0.03,  0.00, -0.01,  0.02, -0.02,  0.01,  0.00,  0.01,  0.00];
 
   return (
-    <div style={{ height: '100%', overflow: 'hidden' }}>
+    <div style={{ minHeight: '100%', paddingBottom: 'calc(130px + env(safe-area-inset-bottom, 0px))' }}>
       {/* Header */}
       <div style={{ padding: '8px 22px', display: 'flex', alignItems: 'center', gap: 12 }}>
         <Avatar name="Kee P" />
@@ -628,7 +630,7 @@ const RECENT_CHECKS = {
 function DashboardScreen({ onRunCheck, onBack }) {
   const [range, setRange] = useState('week');
   return (
-    <div style={{ height: '100%', overflow: 'hidden' }}>
+    <div style={{ minHeight: '100%', paddingBottom: 'calc(130px + env(safe-area-inset-bottom, 0px))' }}>
       {/* Header */}
       <div style={{
         padding: '8px 22px 14px',
@@ -835,16 +837,30 @@ function FaceTestScreen({ onComplete, onClose }) {
     let stream;
     let cancelled = false;
     async function start() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setCamError(true);
+        return;
+      }
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode }, audio: false });
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode }, audio: false });
+        } catch (err) {
+          // Devices without a camera matching facingMode (or browsers that
+          // reject the constraint) — fall back to any available camera.
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        }
         if (cancelled) {
           stream.getTracks().forEach(t => t.stop());
           return;
         }
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
+        const video = videoRef.current;
+        if (video) {
+          video.srcObject = stream;
+          // iOS Safari doesn't reliably honor autoplay when srcObject is set
+          // after mount; play() must be called explicitly.
+          try { await video.play(); } catch (_) { /* autoplay already handled it */ }
         }
-        setCamError(false);
+        if (!cancelled) setCamError(false);
       } catch (e) {
         if (!cancelled) setCamError(true);
       }
@@ -893,7 +909,7 @@ function FaceTestScreen({ onComplete, onClose }) {
       : `${(current.ms / 1000).toFixed(1)}s`;
 
   return (
-    <div>
+    <div style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 0px))' }}>
       <FlowHeader onClose={onClose} label="Active stroke check"/>
 
       <div style={{ padding: '8px 22px 18px' }}>
@@ -926,14 +942,22 @@ function FaceTestScreen({ onComplete, onClose }) {
           {camError && (
             <div style={{
               position: 'absolute', inset: 0,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center',
             }}>
-              <svg width="100%" height="100%" viewBox="0 0 320 400" style={{ opacity: 0.55 }}>
+              <svg width="100%" height="70%" viewBox="0 0 320 400" style={{ opacity: 0.55 }}>
                 <ellipse cx="160" cy="180" rx="80" ry="110" fill="none" stroke="#fff" strokeWidth="2"/>
                 <circle cx="135" cy="160" r="4" fill="#fff"/>
                 <circle cx="185" cy="160" r="4" fill="#fff"/>
                 <path d="M 130 215 Q 160 235 190 215" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
               </svg>
+              <div style={{
+                marginTop: 8, padding: '0 32px', textAlign: 'center',
+                fontSize: 12.5, color: 'rgba(255,255,255,0.85)', lineHeight: 1.4,
+              }}>
+                Camera unavailable. Allow camera access for this site in your
+                browser settings, then reopen this check.
+              </div>
             </div>
           )}
 
@@ -1124,12 +1148,22 @@ function VoiceTestScreen({ onComplete, onClose }) {
     let cancelled = false;
     (async () => {
       try {
+        if (!navigator.mediaDevices?.getUserMedia) { setMicError(true); return; }
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
         streamRef.current = stream;
         const Ctx = window.AudioContext || window.webkitAudioContext;
         const ctx = new Ctx();
         ctxRef.current = ctx;
+        // iOS Safari creates AudioContexts suspended outside a user gesture,
+        // which makes the analyser read all-zeros. Try to resume immediately,
+        // and again on the next touch/click anywhere on the screen.
+        if (ctx.state === 'suspended') {
+          ctx.resume().catch(() => {});
+          const resume = () => ctxRef.current?.resume().catch(() => {});
+          window.addEventListener('pointerdown', resume, { once: true });
+          window.addEventListener('touchend', resume, { once: true });
+        }
         const source = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 128;
@@ -1225,7 +1259,7 @@ function VoiceTestScreen({ onComplete, onClose }) {
             : { label: 'Background · Quiet',    color: T.ok });
 
   return (
-    <div>
+    <div style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 0px))' }}>
       <FlowHeader onClose={onClose} label="Active stroke check"/>
       <div style={{ padding: '8px 22px 18px' }}>
         <ProgressTrack active={1}/>
@@ -1284,7 +1318,10 @@ function VoiceTestScreen({ onComplete, onClose }) {
 
           <div style={{ marginTop: 22, display: 'flex', justifyContent: 'center' }}>
             {!recording ? (
-              <button onClick={() => { setSecs(0); setRecording(true); }} style={{
+              <button onClick={() => {
+                ctxRef.current?.resume?.().catch(() => {});
+                setSecs(0); setRecording(true);
+              }} style={{
                 width: 76, height: 76, borderRadius: '50%', border: 'none',
                 background: T.ink, color: '#fff', cursor: 'pointer',
                 boxShadow: `0 10px 24px ${T.ink}40`,
@@ -1318,7 +1355,7 @@ function ResultsScreen({ onViewTrends, onDone, onRetakeFace, onRetakeVoice, onCl
   const faceDev  = useMemo(() => Math.random() * 5, []);
   const voiceDev = useMemo(() => Math.random() * 5, []);
   return (
-    <div style={{ paddingBottom: 32 }}>
+    <div style={{ paddingBottom: 'calc(32px + env(safe-area-inset-bottom, 0px))' }}>
       <FlowHeader onClose={onClose} label="Active stroke check"/>
       <div style={{ padding: '8px 22px 18px' }}>
         <ProgressTrack active={2} allDone/>
@@ -1423,24 +1460,131 @@ function ResultRow({ label, value = 0 }) {
   );
 }
 
+// ─── Analyzing screen fallbacks ───────────────────────────────────────────
+// Lightweight CSS-only stand-in for the 3D analyzing screen. Shown while the
+// lazy chunk loads, and — with `onComplete` — as the full replacement when the
+// chunk or WebGL fails on-device, so the check flow always reaches results.
+function AnalyzingFallback({ onComplete }) {
+  useEffect(() => {
+    if (!onComplete) return;
+    const t = setTimeout(onComplete, 4000);
+    return () => clearTimeout(t);
+  }, [onComplete]);
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, background: T.appBg,
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      justifyContent: 'center', gap: 22, fontFamily: FONT,
+    }}>
+      <StatusOrb size={150}/>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontSize: 22, fontWeight: 500, color: T.ink, letterSpacing: -0.4 }}>
+          Analyzing signals
+        </div>
+        <div style={{ fontSize: 13, color: T.ink2, marginTop: 6, padding: '0 40px', lineHeight: 1.4 }}>
+          Comparing face and voice readings to your baseline.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+class AnalyzingBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (this.state.failed) return <AnalyzingFallback onComplete={this.props.onComplete}/>;
+    return this.props.children;
+  }
+}
+
 // ─── Root component (default export) ──────────────────────────────────────
 const VALID_PAGES = ['home', 'dashboard', 'face-test', 'voice-test', 'analyzing', 'results'];
 
-export default function BrainSentry() {
-  // Allow ?page=<name> for direct navigation to any screen during development
-  // (e.g. http://localhost:5173/?page=analyzing). Falls through to 'home'.
-  const [page, setPage] = useState(() => {
-    if (typeof window === 'undefined') return 'home';
-    const p = new URLSearchParams(window.location.search).get('page');
-    return VALID_PAGES.includes(p) ? p : 'home';
-  });
+// Each screen gets a real URL so browser back/forward and deep links work.
+// Vercel serves index.html for every path via the vercel.json rewrite.
+const PAGE_PATHS = {
+  'home':       '/',
+  'dashboard':  '/trends',
+  'face-test':  '/check/face',
+  'voice-test': '/check/voice',
+  'analyzing':  '/check/analyzing',
+  'results':    '/check/results',
+};
+const PATH_PAGES = Object.fromEntries(
+  Object.entries(PAGE_PATHS).map(([page, path]) => [path, page])
+);
 
-  const goHome      = () => setPage('home');
-  const goDashboard = () => setPage('dashboard');
-  const goFaceTest  = () => setPage('face-test');
-  const goVoiceTest = () => setPage('voice-test');
-  const goAnalyzing = () => setPage('analyzing');
-  const goResults   = () => setPage('results');
+function pageFromLocation() {
+  // Legacy ?page=<name> deep links still resolve (e.g. ?page=analyzing&hold=1).
+  const qp = new URLSearchParams(window.location.search).get('page');
+  if (VALID_PAGES.includes(qp)) return qp;
+  return PATH_PAGES[window.location.pathname] ?? 'home';
+}
+
+function urlForPage(page) {
+  const qs = new URLSearchParams(window.location.search);
+  qs.delete('page');
+  const search = qs.toString();
+  return PAGE_PATHS[page] + (search ? `?${search}` : '');
+}
+
+export default function BrainSentry() {
+  const [page, setPage] = useState(() =>
+    typeof window === 'undefined' ? 'home' : pageFromLocation()
+  );
+
+  // The analyzing screen's 3D chunk is large (~1MB); start downloading it as
+  // soon as the check flow begins so it's cached by the time it's needed.
+  useEffect(() => {
+    if (page === 'face-test' || page === 'voice-test') {
+      import('./AnalyzingScreen').catch(() => {});
+    }
+  }, [page]);
+
+  // Canonicalize the URL on first load and re-sync state on back/forward.
+  useEffect(() => {
+    window.history.replaceState(
+      { page, idx: window.history.state?.idx ?? 0 }, '', urlForPage(page)
+    );
+    const onPop = (e) => setPage(
+      VALID_PAGES.includes(e.state?.page) ? e.state.page : pageFromLocation()
+    );
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // User-initiated navigation pushes a history entry; automatic transitions
+  // within the check flow (face → voice → analyzing → results) replace it,
+  // so pressing back from anywhere inside the flow returns home.
+  const navigate = (next, { replace = false } = {}) => {
+    setPage(next);
+    const idx = window.history.state?.idx ?? 0;
+    const state = { page: next, idx: replace ? idx : idx + 1 };
+    if (replace) window.history.replaceState(state, '', urlForPage(next));
+    else window.history.pushState(state, '', urlForPage(next));
+  };
+
+  // Close buttons: go back if we navigated here in-app, otherwise (deep link)
+  // land on home without adding a history entry.
+  const goBackOrHome = () => {
+    if ((window.history.state?.idx ?? 0) > 0) window.history.back();
+    else navigate('home', { replace: true });
+  };
+
+  const goHome      = () => navigate('home');
+  const goDashboard = () => navigate('dashboard');
+  const goFaceTest  = () => navigate('face-test');
+  const goVoiceTest = () => navigate('voice-test');
+  const nextVoice     = () => navigate('voice-test', { replace: true });
+  const nextAnalyzing = () => navigate('analyzing',  { replace: true });
+  const nextResults   = () => navigate('results',    { replace: true });
 
   let content;
   switch (page) {
@@ -1451,25 +1595,27 @@ export default function BrainSentry() {
       content = <DashboardScreen onRunCheck={goFaceTest} onBack={goHome}/>;
       break;
     case 'face-test':
-      content = <FaceTestScreen onComplete={goVoiceTest} onClose={goHome}/>;
+      content = <FaceTestScreen onComplete={nextVoice} onClose={goBackOrHome}/>;
       break;
     case 'voice-test':
-      content = <VoiceTestScreen onComplete={goAnalyzing} onClose={goHome}/>;
+      content = <VoiceTestScreen onComplete={nextAnalyzing} onClose={goBackOrHome}/>;
       break;
     case 'analyzing':
       content = (
-        <Suspense fallback={<div style={{ position: 'absolute', inset: 0, background: '#000' }}/>}>
-          <AnalyzingScreen onComplete={goResults}/>
-        </Suspense>
+        <AnalyzingBoundary onComplete={nextResults}>
+          <Suspense fallback={<AnalyzingFallback/>}>
+            <AnalyzingScreen onComplete={nextResults}/>
+          </Suspense>
+        </AnalyzingBoundary>
       );
       break;
     case 'results':
       content = <ResultsScreen
         onViewTrends={goDashboard}
-        onDone={goHome}
+        onDone={goBackOrHome}
         onRetakeFace={goFaceTest}
         onRetakeVoice={goVoiceTest}
-        onClose={goHome}
+        onClose={goBackOrHome}
       />;
       break;
     default:
@@ -1481,18 +1627,27 @@ export default function BrainSentry() {
       <style>{GLOBAL_CSS}{`
         html, body, #root { height: 100%; margin: 0; overflow: hidden; }
         body { background: ${T.appBg}; }
+        /* dvh tracks the *visible* viewport on mobile (URL bar collapse). */
+        .bs-app { height: 100vh; }
+        @supports (height: 100dvh) { .bs-app { height: 100dvh; } }
+        .bs-page {
+          overflow-y: auto; overflow-x: hidden;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior: contain;
+        }
       `}</style>
-      <div style={{
-        maxWidth: 430, margin: '0 auto', height: '100vh',
+      <div className="bs-app" style={{
+        maxWidth: 430, margin: '0 auto',
         background: T.appBg, color: T.ink, fontFamily: FONT,
         position: 'relative', overflow: 'hidden',
       }}>
         <div style={{ paddingTop: 24 }}/>
         <div
           key={page}
+          className="bs-page"
           style={{
             animation: 'bsFade 240ms ease-out both',
-            position: 'absolute', inset: '24px 0 0 0', overflow: 'hidden',
+            position: 'absolute', inset: '24px 0 0 0',
           }}
         >
           {content}

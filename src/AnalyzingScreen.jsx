@@ -361,8 +361,57 @@ function HeartbeatLine() {
 // ── Screen ────────────────────────────────────────────────────────────────
 const DURATION_MS = 7000;
 
+// 2 = WebGL2 (full scene incl. bloom), 1 = WebGL1 (scene without bloom,
+// which needs WebGL2 for mipmapBlur), 0 = no WebGL → CSS-only fallback.
+function detectWebGL() {
+  try {
+    const c = document.createElement('canvas');
+    if (c.getContext('webgl2')) return 2;
+    if (c.getContext('webgl') || c.getContext('experimental-webgl')) return 1;
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Shown instead of the globe when WebGL is unavailable or the GPU context is
+// lost mid-flight (common on memory-constrained mobile Safari). The screen's
+// own timers keep running, so the flow still advances to results.
+function PulseFallback() {
+  return (
+    <div style={{
+      position: 'absolute', inset: 0,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <style>{`
+        @keyframes bsAnPulse {
+          0%, 100% { transform: scale(1);    opacity: 0.35; }
+          50%      { transform: scale(1.18); opacity: 0.10; }
+        }
+      `}</style>
+      <div style={{ position: 'relative', width: 170, height: 170, marginBottom: 120 }}>
+        <div style={{
+          position: 'absolute', inset: 0, borderRadius: '50%',
+          border: `2px solid ${INK2}`, animation: 'bsAnPulse 2.4s ease-in-out infinite',
+        }}/>
+        <div style={{
+          position: 'absolute', inset: 24, borderRadius: '50%',
+          border: `1.5px solid ${MESH}`, animation: 'bsAnPulse 2.4s ease-in-out .4s infinite',
+        }}/>
+        <div style={{
+          position: 'absolute', inset: 58, borderRadius: '50%',
+          background: SIGNAL, opacity: 0.25,
+          animation: 'bsAnPulse 2.4s ease-in-out .8s infinite',
+        }}/>
+      </div>
+    </div>
+  );
+}
+
 export default function AnalyzingScreen({ onComplete }) {
   const [phase, setPhase] = useState(0);
+  const [glLevel] = useState(detectWebGL);
+  const [glFailed, setGlFailed] = useState(false);
 
   const hold = typeof window !== 'undefined'
     && new URLSearchParams(window.location.search).get('hold') === '1';
@@ -374,25 +423,40 @@ export default function AnalyzingScreen({ onComplete }) {
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [onComplete, hold]);
 
+  const showCanvas = glLevel > 0 && !glFailed;
+
   return (
     <div style={{
       position: 'absolute', inset: 0, background: APP_BG,
       color: INK, overflow: 'hidden',
       fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif',
     }}>
-      <Canvas
-        camera={{ position: [0, 0.10, 17], fov: 26 }}
-        style={{ position: 'absolute', inset: 0 }}
-        dpr={[1, 2]}
-        gl={{ antialias: true, alpha: true }}
-      >
-        <ambientLight intensity={1.0}/>
-        <EarthGlobe/>
-        <EffectComposer>
-          {/* Soft halo around the bright outlines */}
-          <Bloom intensity={0.55} luminanceThreshold={0.15} luminanceSmoothing={0.4} mipmapBlur/>
-        </EffectComposer>
-      </Canvas>
+      {showCanvas ? (
+        <Canvas
+          camera={{ position: [0, 0.10, 17], fov: 26 }}
+          style={{ position: 'absolute', inset: 0 }}
+          dpr={[1, 2]}
+          gl={{ antialias: true, alpha: true }}
+          onCreated={({ gl }) => {
+            gl.domElement.addEventListener('webglcontextlost', (e) => {
+              e.preventDefault();
+              setGlFailed(true);
+            });
+          }}
+        >
+          <ambientLight intensity={1.0}/>
+          <EarthGlobe/>
+          {/* Bloom's mipmapBlur needs WebGL2; skip postprocessing on WebGL1 */}
+          {glLevel === 2 && (
+            <EffectComposer>
+              {/* Soft halo around the bright outlines */}
+              <Bloom intensity={0.55} luminanceThreshold={0.15} luminanceSmoothing={0.4} mipmapBlur/>
+            </EffectComposer>
+          )}
+        </Canvas>
+      ) : (
+        <PulseFallback/>
+      )}
 
       <CornerBrackets/>
 
