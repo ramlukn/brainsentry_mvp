@@ -1330,8 +1330,10 @@ function VoiceTestScreen({ onComplete, onClose }) {
             }
             const avg = n ? sum / n : 0;
             const taper = Math.sin((Math.PI * (i + 0.5)) / WAVE_BARS); // 0 → 1 → 0
-            const envelope = 0.2 + 0.8 * taper;
-            out[i] = Math.min(1, ((avg / 255) * 1.9 * envelope) + 0.04);
+            // Squared on the left half so the low-frequency end (which
+            // carries most speech energy) clamps down to zero at the edge.
+            const envelope = i < WAVE_BARS / 2 ? taper * taper : taper;
+            out[i] = Math.min(1, ((avg / 255) * 1.9 * envelope) + 0.02);
           }
 
           // RMS over time-domain (centred at 128) → 0..~0.5 in practice.
@@ -1580,9 +1582,10 @@ function ResultRow({ label, value = 0 }) {
   const up = value > 0.05;
   const down = value < -0.05;
   const sign = up ? '+' : down ? '−' : '±';
-  const display = `${sign}${Math.abs(value).toFixed(1)}%`;
-  // Half-width of the bar as a % of the track, capped at ±5%.
-  const half = Math.min(50, (Math.abs(value) / 5) * 50);
+  const display = `${sign} ${Math.abs(value).toFixed(1)}%`;
+  // Half-width of the bar as a % of the track. Full scale is ±10%, so the
+  // typical 0–5% deviations render as suitably small bars.
+  const half = Math.min(50, (Math.abs(value) / 10) * 50);
   return (
     <div style={{
       background: T.surface, borderRadius: 18, padding: '14px 16px',
