@@ -864,64 +864,115 @@ function FaceTestScreen({ onComplete, onClose }) {
   const compact = useMediaQuery(COMPACT_MQ);
   const [started, setStarted] = useState(false);
   const [stepIdx, setStepIdx] = useState(0);
-  const [camError, setCamError] = useState(false);
+  // null = camera OK/starting; otherwise { name, message } of the failure so
+  // the UI can branch on it and testers can report the exact error.
+  const [camError, setCamError] = useState(null);
   const [facingMode, setFacingMode] = useState('environment');
-  // Bumping this re-runs the camera effect: used by the gesture-triggered
-  // "Enable camera" button (iOS won't prompt outside a user gesture) and by
-  // wake-from-sleep recovery.
-  const [camAttempt, setCamAttempt] = useState(0);
   const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  // Monotonic sequence guarding stale async completions (unmount, flip,
+  // retry racing an in-flight getUserMedia).
+  const camSeq = useRef(0);
 
-  const retryCamera = () => { setCamError(false); setCamAttempt(a => a + 1); };
+  const stopStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) videoRef.current.srcObject = null;
+  };
 
-  // Camera
-  useEffect(() => {
-    let stream;
-    let cancelled = false;
-    async function start() {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setCamError(true);
+  // IMPORTANT: this must be invoked *directly* from tap handlers (not routed
+  // through setState → useEffect) — iOS WebKit only shows the camera
+  // permission prompt while the user-activation context is live, and that
+  // context does not survive into an effect on the next render.
+  const startCamera = async (mode) => {
+    const seq = ++camSeq.current;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCamError(window.isSecureContext === false
+        ? { name: 'InsecureContext', message: 'Camera needs an https connection.' }
+        : { name: 'Unsupported', message: 'This browser cannot capture camera video.' });
+      return;
+    }
+    try {
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode }, audio: false });
+      } catch (err) {
+        // Devices without a camera matching facingMode (or browsers that
+        // reject the constraint) — fall back to any available camera.
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+      if (seq !== camSeq.current) {
+        stream.getTracks().forEach(t => t.stop());
         return;
       }
-      try {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode }, audio: false });
-        } catch (err) {
-          // Devices without a camera matching facingMode (or browsers that
-          // reject the constraint) — fall back to any available camera.
-          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        }
-        if (cancelled) {
-          stream.getTracks().forEach(t => t.stop());
-          return;
-        }
-        // Screen lock or another app claiming the camera ends the track
-        // without any error — surface it so the user can re-enable.
-        stream.getTracks().forEach(t => {
-          t.onended = () => { if (!cancelled) setCamError(true); };
-        });
-        const video = videoRef.current;
-        if (video) {
-          video.srcObject = stream;
-          // iOS Safari doesn't reliably honor autoplay when srcObject is set
-          // after mount; play() must be called explicitly.
-          try { await video.play(); } catch (_) { /* autoplay already handled it */ }
-        }
-        if (!cancelled) setCamError(false);
-      } catch (e) {
-        if (!cancelled) setCamError(true);
+      stopStream();
+      streamRef.current = stream;
+      // Screen lock or another app claiming the camera ends the track
+      // without any error — surface it so the user can re-enable.
+      stream.getTracks().forEach(t => {
+        t.onended = () => {
+          if (seq === camSeq.current) {
+            setCamError({ name: 'Interrupted', message: 'The camera was stopped by the system.' });
+          }
+        };
+      });
+      const video = videoRef.current;
+      if (video) {
+        video.srcObject = stream;
+        // iOS Safari doesn't reliably honor autoplay when srcObject is set
+        // after mount; play() must be called explicitly.
+        try { await video.play(); } catch (_) { /* autoplay already handled it */ }
       }
+      if (seq === camSeq.current) setCamError(null);
+    } catch (e) {
+      if (seq !== camSeq.current) return;
+      let err = { name: e?.name || 'Error', message: e?.message || String(e) };
+      // Distinguish "no camera hardware" (e.g. iOS Simulator, some desktops)
+      // from permission problems — WebKit reports it as a constraint error.
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (!devices.some(d => d.kind === 'videoinput')) {
+          err = { name: 'NoCamera', message: 'No camera was found on this device.' };
+        }
+      } catch (_) { /* keep the original error */ }
+      if (seq === camSeq.current) setCamError(err);
     }
-    start();
+  };
+
+  // Gesture-context retry — calls getUserMedia synchronously enough that the
+  // tap's user activation is still live when the permission check runs.
+  const retryCamera = () => { setCamError(null); startCamera(facingMode); };
+
+  useEffect(() => {
+    let disposed = false;
+
+    // Only auto-start when permission is already granted (or when the
+    // Permissions API can't tell us). iOS WebKit shows the camera prompt
+    // only inside a user gesture — a first-visit auto-attempt is denied
+    // silently and can poison the tap-retry on the same page load. So on
+    // first visits we wait for the "Enable camera" tap instead.
+    (async () => {
+      let canAutoStart = true;
+      try {
+        const status = await navigator.permissions.query({ name: 'camera' });
+        canAutoStart = status.state === 'granted';
+      } catch (_) { /* Permissions API unavailable — just try */ }
+      if (disposed) return;
+      if (canAutoStart) startCamera(facingMode);
+      else setCamError({ name: 'NeedsPermission', message: '' });
+    })();
 
     // Mobile browsers suspend or end camera tracks while the page is hidden
     // (screen sleep, app switch). On return, restart the stream if it died,
-    // or nudge playback if it merely paused.
+    // or nudge playback if it merely paused. (Restarting is fine without a
+    // gesture here: a stream only ever existed if permission was granted.)
     const onVisible = () => {
-      if (document.visibilityState !== 'visible' || cancelled) return;
-      const track = stream && stream.getVideoTracks()[0];
+      if (document.visibilityState !== 'visible' || !streamRef.current) return;
+      const track = streamRef.current.getVideoTracks()[0];
       if (!track || track.readyState === 'ended' || track.muted) {
-        setCamAttempt(a => a + 1);
+        startCamera(facingMode);
       } else if (videoRef.current) {
         videoRef.current.play().catch(() => {});
       }
@@ -929,12 +980,13 @@ function FaceTestScreen({ onComplete, onClose }) {
     document.addEventListener('visibilitychange', onVisible);
 
     return () => {
-      cancelled = true;
+      disposed = true;
+      camSeq.current++; // invalidate any in-flight start
       document.removeEventListener('visibilitychange', onVisible);
-      if (stream) stream.getTracks().forEach(t => t.stop());
-      if (videoRef.current) videoRef.current.srcObject = null;
+      stopStream();
     };
-  }, [facingMode, camAttempt]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [facingMode]);
 
   const flipCamera = () => setFacingMode(m => (m === 'user' ? 'environment' : 'user'));
 
@@ -986,14 +1038,15 @@ function FaceTestScreen({ onComplete, onClose }) {
           aspectRatio: compact ? '1 / 1.08' : '4 / 5',
           borderRadius: 22, overflow: 'hidden', background: '#0E2A2A',
         }}>
-          {/* Video stream */}
-          {!camError && (
-            <video ref={videoRef} autoPlay playsInline muted style={{
-              position: 'absolute', inset: 0, width: '100%', height: '100%',
-              objectFit: 'cover',
-              transform: facingMode === 'user' ? 'scaleX(-1)' : 'none',
-            }}/>
-          )}
+          {/* Video stream — always mounted so startCamera() can attach a
+              stream even while the error overlay is up (the retry path runs
+              before React re-renders without the overlay). */}
+          <video ref={videoRef} autoPlay playsInline muted style={{
+            position: 'absolute', inset: 0, width: '100%', height: '100%',
+            objectFit: 'cover',
+            transform: facingMode === 'user' ? 'scaleX(-1)' : 'none',
+            opacity: camError ? 0 : 1,
+          }}/>
 
           {/* Radial gradient */}
           <div style={{
@@ -1021,8 +1074,20 @@ function FaceTestScreen({ onComplete, onClose }) {
                 marginTop: 8, padding: '0 32px', textAlign: 'center',
                 fontSize: 12.5, color: 'rgba(255,255,255,0.85)', lineHeight: 1.4,
               }}>
-                Camera is off. Tap below and allow camera access when prompted.
+                {camError && (camError.name === 'NotAllowedError' || camError.name === 'SecurityError')
+                  ? 'Camera access is blocked for this site. In Safari, tap the page settings ("aA") button in the address bar → Website Settings → Camera → Allow. Then tap Enable camera.'
+                  : camError && camError.name === 'NoCamera'
+                    ? 'This device has no camera available to the browser (the iOS Simulator has none — use a real device).'
+                    : 'Camera is off. Tap below and allow camera access when prompted.'}
               </div>
+              {camError && camError.name !== 'NeedsPermission' && (
+                <div style={{
+                  marginTop: 6, padding: '0 32px', textAlign: 'center',
+                  fontFamily: MONO, fontSize: 10, color: 'rgba(255,255,255,0.5)',
+                }}>
+                  {camError.name}{camError.message ? `: ${camError.message}` : ''}
+                </div>
+              )}
               <button onClick={retryCamera} style={{
                 marginTop: 14, height: 40, padding: '0 22px', borderRadius: 999,
                 border: '1px solid rgba(255,255,255,0.55)', cursor: 'pointer',
