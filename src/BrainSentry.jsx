@@ -489,16 +489,16 @@ function HomeScreen({ onRunCheck, onOpenDashboard }) {
           <div style={{ fontSize: 15, fontWeight: 600, color: T.ink, lineHeight: 1.2 }}>Kee</div>
         </div>
         <button aria-label="South Sudan Ministry of Health" style={{
-          width: 46, height: 46, background: 'transparent', border: 'none',
+          width: 54, height: 54, background: 'transparent', border: 'none',
           padding: 0, cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
           <img
             src="/ss-moh.png"
             alt="South Sudan Ministry of Health"
-            width={44}
-            height={44}
-            style={{ display: 'block', mixBlendMode: 'multiply' }}
+            width={52}
+            height={52}
+            style={{ display: 'block' }}
           />
         </button>
       </div>
